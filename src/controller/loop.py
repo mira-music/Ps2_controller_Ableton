@@ -2,21 +2,14 @@
 ================================================================================
   src/controller/loop.py — Main Controller Thread
 ================================================================================
-  The controller_loop() daemon thread (~125 Hz):
-
-    1. Reads pygame events (button down/up, hat motion, device removed)
-    2. Dispatches to button handlers
+  Daemon thread (~125 Hz) that:
+    1. Reads pygame events (buttons, axes, device removed)
+    2. Dispatches button events to handlers
     3. Reconciles ghost SELECT events
-    4. Routes the right stick to the correct axis handler based on
-       modifier state priority:
-         L1 held       → handle_axes_fx (FX layer)
-         SELECT held   → handle_right_joystick_volume
-         EQ mode ON    → handle_axes_eq
-         (else)        → right stick idle
-    5. Left stick always drives nav (handle_axes_navigation)
+    4. Routes right stick by modifier priority (L1 > SELECT > EQ > idle)
+    5. Left stick always drives navigation
     6. D-pad routed by current layer
-    7. Clears UI flashes if expired
-    8. Sleeps 8ms (pygame.time.wait) → ~125 Hz polling rate
+    7. Sleeps 8ms → ~125 Hz polling rate
 ================================================================================
 """
 
@@ -31,6 +24,9 @@ from src.controller.axes import (
     handle_axes_navigation, handle_axes_fx, handle_axes_eq,
     handle_right_joystick_volume, handle_dpad,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MODULE-LEVEL TIMING
@@ -47,7 +43,7 @@ def controller_loop():
     try:
         pygame.init()
     except Exception as e:
-        print(f"  ⚠  pygame init error: {e}")
+        log.error(f"pygame init error: {e}")
 
     reprobe_controller(reason="startup")
     _axis_last_tick = time.perf_counter()
@@ -117,7 +113,7 @@ def controller_loop():
             pygame.time.wait(8)
 
         except Exception as e:
-            print(f"  ⚠  Controller loop error: {e}")
+            log.error(f"Controller loop error: {e}")
             st._set_controller_handle(None)
             with st._lock:
                 st.state["controller_connected"] = False

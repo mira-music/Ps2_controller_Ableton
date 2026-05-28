@@ -34,6 +34,9 @@ from src.osc.client import (
     osc_query_position, osc_query_group_previews,
     osc_query_track_color,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MAIN DISCOVERY
@@ -41,19 +44,19 @@ from src.osc.client import (
 
 def fetch_all_names():
     if not st._fetch_lock.acquire(blocking=False):
-        print("  ℹ  Fetch already running — skipping.")
+        log.info("Fetch already running — skipping")
         return
     try:
-        print("  📚 Requesting session counts…")
+        log.info("Requesting session counts…")
         st.osc.send_message("/live/song/get/num_scenes", [])
         st.osc.send_message("/live/song/get/num_tracks", [])
         time.sleep(0.6)
         with st._lock:
             scene_count = st.state["_real_scene_count"]
             track_count = st.state["_real_track_count"]
-        print(f"  ℹ  {scene_count} scenes, {track_count} tracks")
+        log.info(f"Session: {scene_count} scenes, {track_count} tracks")
 
-        print(f"  📚 Fetching scene names + colors…")
+        log.info("Fetching scene names + colors…")
         for i in range(min(scene_count, 256)):
             st.osc.send_message("/live/scene/get/name",  [i])
             st.osc.send_message("/live/scene/get/color", [i])
@@ -61,7 +64,7 @@ def fetch_all_names():
         time.sleep(0.4)
         rebuild_bookmarks()
 
-        print(f"  📚 Fetching track names + colors…")
+        log.info("Fetching track names + colors…")
         for i in range(min(track_count, 64)):
             st.osc.send_message("/live/track/get/name",  [i])
             st.osc.send_message("/live/track/get/color", [i])
@@ -76,7 +79,7 @@ def fetch_all_names():
             eq_idx = st.state["eq_track_index"]
 
         if fx_idx >= 0:
-            print(f"  ⚡ Loading FX macro metadata from track {fx_idx}…")
+            log.info(f"Loading FX macro metadata from track {fx_idx}…")
             osc_query_fx_macro_names()
             time.sleep(0.4)
             osc_query_fx_macro_mins()
@@ -91,7 +94,7 @@ def fetch_all_names():
             osc_register_fx_listeners()
 
         if eq_idx >= 0:
-            print(f"  ◇ Loading EQ macro metadata from track {eq_idx}…")
+            log.info(f"Loading EQ macro metadata from track {eq_idx}…")
             osc_query_eq_macro_names()
             time.sleep(0.4)
             osc_query_eq_macro_mins()
@@ -112,8 +115,8 @@ def fetch_all_names():
             bm_count = len(st.state["bookmarks"])
             gr_count = len(st.state["groups"])
 
-        print(
-            f"  ✅ Ready — "
+        log.info(
+            f"Ready — "
             f"{bm_count} bookmarks | {gr_count} groups | "
             f"FX: {'YES (t' + str(fx_idx) + ')' if fx_idx >= 0 else 'NO'} | "
             f"EQ: {'YES (t' + str(eq_idx) + ')' if eq_idx >= 0 else 'NO'}"
@@ -136,7 +139,7 @@ def rebuild_bookmarks():
     for idx, name in enumerate(all_scenes):
         if name.startswith(BOOKMARK_PREFIX):
             bmarks.append({"name": name[len(BOOKMARK_PREFIX):].strip(), "scene_index": idx})
-    print(f"  § {len(bmarks)} bookmark(s) found")
+    log.info(f"{len(bmarks)} bookmark(s) found")
     with st._lock:
         st.state["bookmarks"] = bmarks
         if not bmarks:
@@ -166,7 +169,7 @@ def rebuild_groups():
     for idx, name in enumerate(all_tracks):
         if name.startswith(GROUP_PREFIX):
             groups.append({"name": name[len(GROUP_PREFIX):].strip(), "track_index": idx})
-    print(f"  * {len(groups)} group(s) found")
+    log.info(f"{len(groups)} group(s) found")
     with st._lock:
         st.state["groups"] = groups
         if not groups:
@@ -195,9 +198,9 @@ def rebuild_fx_track():
         if fx_idx < 0:
             st.state["fx_ready"] = False
     if fx_idx >= 0:
-        print(f"  ⚡ FX track found at index {fx_idx}")
+        log.info(f"FX track found at index {fx_idx}")
     else:
-        print(f"  ⚠  '{FX_TRACK_NAME}' not found — FX panel inactive")
+        log.warning(f"'{FX_TRACK_NAME}' not found — FX panel inactive")
 
 def rebuild_eq_track():
     with st._lock:
@@ -213,6 +216,6 @@ def rebuild_eq_track():
         if eq_idx < 0:
             st.state["eq_ready"] = False
     if eq_idx >= 0:
-        print(f"  ◇ EQ track found at index {eq_idx}")
+        log.info(f"EQ track found at index {eq_idx}")
     else:
-        print(f"  ℹ  '{EQ_TRACK_NAME}' not found — EQ panel inactive (optional)")
+        log.info(f"'{EQ_TRACK_NAME}' not found — EQ panel inactive (optional)")

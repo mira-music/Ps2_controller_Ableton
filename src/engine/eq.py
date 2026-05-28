@@ -2,24 +2,13 @@
 ================================================================================
   src/engine/eq.py — EQ Mode Engine
 ================================================================================
-  The full EQ control system for v9.11:
-
-    - Mode toggle (entered/exited via R3 in nav layer)
-    - Band selection (Low/Mid/High) with wrap-around switching
-    - Smart kill/normalize: double-flick X LEFT
-        - If above 0 dB → normalize to 0 dB
-        - If at/below 0 dB → kill (-inf for bass, -19 dB for mid/high)
-    - Smart restore/boost: double-flick X RIGHT
-        - If below 0 dB → restore to 0 dB
-        - If at/above 0 dB + mid/high → +15% of remaining headroom
-        - If at/above 0 dB + bass → blocked for safety
-    - Band navigation: double-flick Y (mirrors X pattern)
-        - UP → next band (MID→HIGH→LOW→MID, no borders)
-        - DOWN → prev band (MID→LOW→HIGH→MID, no borders)
-    - Continuous encoder on X (held)
-        - Right = boost, Left = cut, release = hold
-        - Sticky 0 dB detent
-        - Bass safety cap at +2 dB via encoder
+  Full EQ control system for v9.11:
+    - Mode toggle (R3 in nav layer)
+    - Band selection with wrap-around
+    - Smart kill/normalize (double-flick X LEFT)
+    - Smart restore/boost (double-flick X RIGHT)
+    - Band navigation via double-flick Y (no borders)
+    - Continuous encoder on X with sticky 0 dB detent
 ================================================================================
 """
 
@@ -38,6 +27,9 @@ from src.config import (
 from src.helpers import clamp, eq_encoder_delta
 from src.osc.client import osc_set_eq_macro
 from src.engine.polling import start_eq_ramp
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MODE TOGGLE
@@ -77,7 +69,7 @@ def eq_switch_band(direction):
         st.state["_eq_encoder_last_tick"] = time.perf_counter()
         band_name = EQ_MACRO_NAMES_EXPECTED[new]
         st.state["last_action"] = f"◇ → {band_name}"
-    print(f"  ◇ EQ band switched to {band_name}")
+    log.info(f"EQ band switched to {band_name}")
 
 def eq_arm_band(direction):
     """Visual armed state during first flick (kept for compat — unused in v9.11 nav)."""
@@ -90,28 +82,24 @@ def eq_arm_band(direction):
         st.state["last_action"] = f"◇ → {band_name} armed (flick again)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  VALUE ACTIONS — kill / normalize / boost / restore
+#  VALUE ACTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_action_kill(band, flick_duration_s):
     """
-    v9.11 — Double-flick LEFT — SMART kill/normalize.
+    Double-flick LEFT — SMART kill/normalize.
       - If value > 0 dB → normalize back to 0 dB
       - If value ≤ 0 dB → KILL (bass = -inf, mid/high = -19 dB)
-
-    At exactly 0 dB, LEFT-flick triggers kill (aggressive but predictable).
     """
     with st._lock:
         current = st.state["eq_macro_values"][band]
         band_name = EQ_MACRO_NAMES_EXPECTED[band]
 
     if current > EQ_NEUTRAL_MACRO + 0.5:
-        # Above neutral → normalize back to 0 dB
         start_eq_ramp(band, EQ_NEUTRAL_MACRO, flick_duration_s)
         with st._lock:
             st.state["last_action"] = f"↓ {band_name} normalized (0 dB)"
     else:
-        # At or below neutral → kill
         if band == EQ_SLOT_LOW:
             target = EQ_MACRO_MIN
             action_text = "💥 BASS KILLED"
@@ -125,10 +113,10 @@ def eq_action_kill(band, flick_duration_s):
 
 def eq_action_boost_or_restore(band, flick_duration_s):
     """
-    v9.11 — Double-flick RIGHT — SMART restore/boost.
+    Double-flick RIGHT — SMART restore/boost.
       - If value < 0 dB → restore to 0 dB
-      - If value ≥ 0 dB + Mid/High → add 15% of remaining headroom (asymptotic)
-      - If value ≥ 0 dB + LOW (bass) → BLOCKED (speaker safety)
+      - If value ≥ 0 dB + Mid/High → +15% of remaining headroom
+      - If value ≥ 0 dB + LOW (bass) → BLOCKED (safety)
     """
     with st._lock:
         current = st.state["eq_macro_values"][band]
@@ -150,7 +138,7 @@ def eq_action_boost_or_restore(band, flick_duration_s):
             st.state["last_action"] = f"↑ {band_name} boosted (+{boost:.2f} macro)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  X GESTURE STATE MACHINE — value actions via double-flick
+#  X GESTURE — VALUE ACTIONS (double-flick)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def update_eq_x_gesture(stick_x, now):
@@ -224,22 +212,17 @@ def update_eq_x_gesture(stick_x, now):
     return False
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Y GESTURE STATE MACHINE — band navigation via double-flick (v9.11)
+#  Y GESTURE — BAND NAVIGATION (double-flick)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def update_eq_y_gesture_v911(stick_y, now):
     """
     v9.11 — Y axis double-flick BAND NAVIGATION.
 
-    Pattern: extreme → center → extreme (same direction) → SWITCH band.
+    UP (positive Y)   → next band UP    (MID→HIGH→LOW→MID loop)
+    DOWN (negative Y) → next band DOWN  (MID→LOW→HIGH→MID loop)
 
-    UP (positive Y)   → next band UP    (MID→HIGH→LOW→MID loop, no borders)
-    DOWN (negative Y) → next band DOWN  (MID→LOW→HIGH→MID loop, no borders)
-
-    During first flick, the target band lights up amber (armed).
-    Failed flick or timeout → reset, no action.
-
-    Returns True if gesture in progress (caller should freeze X encoder).
+    Returns True if gesture in progress (caller freezes X encoder).
     """
     with st._lock:
         gesture_state = st.state["_eq_flick_y_state"]
@@ -253,7 +236,6 @@ def update_eq_y_gesture_v911(stick_y, now):
 
     if gesture_state == "idle":
         if abs_y >= EQ_FLICK_EXTREME:
-            # First flick — arm target band
             target_band = (selected_band + dir_y) % 3
             with st._lock:
                 st.state["_eq_flick_y_state"] = "flicked"
@@ -284,7 +266,6 @@ def update_eq_y_gesture_v911(stick_y, now):
 
     elif gesture_state == "returned":
         if abs_y >= EQ_FLICK_EXTREME and dir_y == gesture_dir:
-            # Second flick confirmed — switch band!
             eq_switch_band(gesture_dir)
             with st._lock:
                 st.state["_eq_flick_y_state"] = "idle"
@@ -308,13 +289,9 @@ def update_eq_y_gesture_v911(stick_y, now):
 
 def eq_drive_continuous_encoder(stick_x, now):
     """
-    v9.9+ — Encoder-style EQ control via X axis.
-
-    Right = boost (positive delta), Left = cut (negative delta).
-    Release = value HOLDS at current position.
-
-    Includes sticky 0 dB detent: slows down when crossing neutral.
-    Bass safety cap: encoder cannot push bass above +2 dB.
+    Encoder-style EQ control via X axis.
+    Right = boost, Left = cut, release = HOLD.
+    Includes sticky 0 dB detent and bass safety cap.
     """
     with st._lock:
         selected_band = st.state["eq_selected_band"]
@@ -342,7 +319,6 @@ def eq_drive_continuous_encoder(stick_x, now):
     if delta == 0.0:
         return
 
-    # Sticky 0 dB detent — slow down near neutral
     distance_from_neutral = abs(current_val - EQ_NEUTRAL_MACRO)
     if distance_from_neutral < EQ_DETENT_RANGE:
         detent_factor = distance_from_neutral / EQ_DETENT_RANGE

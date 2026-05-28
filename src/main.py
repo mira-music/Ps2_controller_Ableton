@@ -8,6 +8,10 @@
   Then creates the Tkinter root window, builds the UI, and starts the
   main loop. On window close, cleanly stops OSC listeners and shuts
   down the server.
+
+  Logging is initialized FIRST, before any other module can log.
+  An uncaught-exception handler is installed so crashes get logged
+  before the process dies.
 ================================================================================
 """
 
@@ -42,11 +46,15 @@ from src.ui.updater import update_ui
 
 def main():
     # ─── INITIALIZE LOGGING FIRST (before anything else can log) ───
-    from src.log_setup import init_logging, get_logger
+    from src.log_setup import init_logging, get_logger, install_crash_handler
     init_logging()
+    install_crash_handler()
     log = get_logger(__name__)
 
-    log.info("=" * 64)
+    log.info("")
+    log.info("╔" + "═" * 62 + "╗")
+    log.info("║" + " " * 22 + "SESSION START" + " " * 27 + "║")
+    log.info("╚" + "═" * 62 + "╝")
     log.info(f"  FX MACHINE v{VERSION}  —  MIRA___OFC / Modulated_OFC")
     log.info(f"  © Ayoub Agoujdad. Trademark registered. Non-commercial only.")
     log.info("=" * 64)
@@ -91,6 +99,10 @@ def main():
     root.after(UI_REFRESH_MS, update_ui, root, lbl)
 
     def on_close():
+        log.info("")
+        log.info("╔" + "═" * 62 + "╗")
+        log.info("║" + " " * 23 + "SESSION END" + " " * 28 + "║")
+        log.info("╚" + "═" * 62 + "╝")
         log.info("Shutting down…")
         try:
             osc_stop_fx_listeners()
@@ -107,24 +119,5 @@ def main():
     root.mainloop()
 
     log.info("👋 Stopped.")
-    pygame.quit()
-    sys.exit(0)
-    def on_close():
-        print("  Shutting down…")
-        try:
-            osc_stop_fx_listeners()
-            osc_stop_eq_listeners()
-            osc_stop_eq_meter_listener()
-        except Exception as e:
-            print(f"  ⚠  Listener stop error: {e}")
-        if st._osc_server is not None:
-            st._osc_server.shutdown()
-            st._osc_server = None
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", on_close)
-    root.mainloop()
-
-    print("  👋 Stopped.")
     pygame.quit()
     sys.exit(0)

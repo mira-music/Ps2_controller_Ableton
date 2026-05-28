@@ -19,6 +19,9 @@ from src.config import (
     OSC_HOST, OSC_SEND_PORT,
     FX_RACK_DEVICE_INDEX, EQ_RACK_DEVICE_INDEX,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  SETUP
@@ -26,7 +29,7 @@ from src.config import (
 
 def setup_osc():
     st.osc = udp_client.SimpleUDPClient(OSC_HOST, OSC_SEND_PORT)
-    print(f"  ✅ OSC sender  → {OSC_HOST}:{OSC_SEND_PORT}")
+    log.info(f"OSC sender ready → {OSC_HOST}:{OSC_SEND_PORT}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  NAVIGATION + VIEW
@@ -193,7 +196,7 @@ def osc_register_fx_listeners():
                             [track_idx, FX_RACK_DEVICE_INDEX, pid])
         count += 2
     st.FX_LISTEN_REGISTERED = True
-    print(f"  📡 FX listeners registered: {count} listeners armed.")
+    log.info(f"FX listeners registered: {count} listeners armed")
 
 def osc_stop_fx_listeners():
     with st._lock:
@@ -213,7 +216,7 @@ def osc_stop_fx_listeners():
         except Exception:
             pass
     st.FX_LISTEN_REGISTERED = False
-    print("  📡 FX listeners stopped.")
+    log.info("FX listeners stopped")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FX WRITES
@@ -302,7 +305,7 @@ def osc_register_eq_listeners():
                             [track_idx, EQ_RACK_DEVICE_INDEX, pid])
         count += 2
     st.EQ_LISTEN_REGISTERED = True
-    print(f"  📡 EQ listeners registered: {count} listeners armed.")
+    log.info(f"EQ listeners registered: {count} listeners armed")
 
 def osc_stop_eq_listeners():
     with st._lock:
@@ -322,7 +325,7 @@ def osc_stop_eq_listeners():
         except Exception:
             pass
     st.EQ_LISTEN_REGISTERED = False
-    print("  📡 EQ listeners stopped.")
+    log.info("EQ listeners stopped")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  EQ WRITES
@@ -341,7 +344,7 @@ def osc_set_eq_macro(slot, value):
                         [track_idx, EQ_RACK_DEVICE_INDEX, param_id, float(value)])
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  v9.10: EQ TRACK OUTPUT METER (DJM channel meter)
+#  EQ TRACK OUTPUT METER (DJM channel meter)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def osc_register_eq_meter_listener():
@@ -353,9 +356,9 @@ def osc_register_eq_meter_listener():
     try:
         st.osc.send_message("/live/track/start_listen/output_meter_left",  [track_idx])
         st.osc.send_message("/live/track/start_listen/output_meter_right", [track_idx])
-        print(f"  📊 EQ meter listeners armed on track {track_idx}")
+        log.info(f"EQ meter listeners armed on track {track_idx}")
     except Exception as e:
-        print(f"  ⚠  Meter listener register failed: {e}")
+        log.warning(f"Meter listener register failed: {e}")
 
 def osc_stop_eq_meter_listener():
     with st._lock:

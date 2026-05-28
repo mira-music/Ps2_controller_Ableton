@@ -24,9 +24,12 @@ from src.osc.client import (
     osc_query_position, osc_query_fx_macro_values, osc_query_eq_macro_values,
     osc_set_eq_macro,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  MODULE-LEVEL TRACKERS (used by polling_loop)
+#  MODULE-LEVEL TRACKERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 _last_known_track_count = 0
@@ -39,7 +42,6 @@ _last_fx_safety_poll    = 0.0
 
 def polling_loop():
     global _last_known_track_count, _last_known_scene_count, _last_fx_safety_poll
-    # Import here to avoid circular import (discovery imports from client)
     from src.osc.discovery import fetch_all_names
 
     tick = 0
@@ -88,8 +90,8 @@ def polling_loop():
 
                 if tc != _last_known_track_count or sc != _last_known_scene_count:
                     if _last_known_track_count != 0:
-                        print(
-                            f"  🔄 Session changed "
+                        log.info(
+                            f"Session changed "
                             f"({tc} tracks, {sc} scenes) — rescanning…"
                         )
                         threading.Thread(
@@ -102,7 +104,7 @@ def polling_loop():
             time.sleep(0.15)
 
         except Exception as e:
-            print(f"  ⚠  Polling error: {e}")
+            log.error(f"Polling error: {e}")
             time.sleep(1.0)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -118,7 +120,7 @@ def eq_ramp_loop():
             time.sleep(tick_interval)
             tick_eq_ramps()
         except Exception as e:
-            print(f"  ⚠  EQ ramp loop error: {e}")
+            log.error(f"EQ ramp loop error: {e}")
             time.sleep(0.5)
 
 def tick_eq_ramps():
@@ -152,7 +154,6 @@ def tick_eq_ramps():
                 writes.append((slot, final_val))
             else:
                 progress = elapsed / duration
-                # Cubic ease-out (smoother than exponential, no clicks)
                 eased = 1.0 - (1.0 - progress) ** 3
                 current_val = start_val + (target_val - start_val) * eased
                 st.state["eq_macro_values"][slot] = current_val

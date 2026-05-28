@@ -21,6 +21,9 @@ from src.config import (
     ABLETON_ERROR_THROTTLE,
 )
 from src.helpers import clamp
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TRANSPORT + SESSION HANDLERS
@@ -175,17 +178,39 @@ def on_track_count(address, *args):
             st.ableton["all_track_names"]    = [""] * st.state["_real_track_count"]
             st.ableton["all_track_colors"]   = [0]  * st.state["_real_track_count"]
 
+# ─── Known harmless Ableton error patterns ───
+# These happen when navigating into empty clip slots / unassigned tracks
+# and don't indicate a real problem. We downgrade them to DEBUG so they
+# don't clutter normal logs, but are still recorded if DEBUG is enabled.
+_IGNORED_ABLETON_ERROR_PATTERNS = (
+    "'NoneType' object has no attribute 'name'",
+    "'NoneType' object has no attribute 'color'",
+    "'NoneType' object has no attribute 'clip'",
+    "'NoneType' object has no attribute 'is_playing'",
+    "'NoneType' object has no attribute 'value'",
+)
+
 def on_ableton_error(address, *args):
     if not args:
         return
     msg = str(args[0])
     now = time.perf_counter()
+
+    # Throttle exact-duplicate messages
     if (msg == st._last_ableton_error_msg and
             (now - st._last_ableton_error_time) < ABLETON_ERROR_THROTTLE):
         return
     st._last_ableton_error_msg  = msg
     st._last_ableton_error_time = now
-    print(f"  ⚠  Ableton: {msg}")
+
+    # Filter known-benign patterns (empty slots, etc.) to DEBUG level
+    for ignored in _IGNORED_ABLETON_ERROR_PATTERNS:
+        if ignored in msg:
+            log.debug(f"Ableton (benign): {msg}")
+            return
+
+    # Anything else is a real warning
+    log.warning(f"Ableton error: {msg}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  PARAM LIST EXTRACTORS
@@ -243,10 +268,10 @@ def on_fx_macro_names(address, *args):
     with st._lock:
         st.state["fx_macro_names"]     = found_names
         st.state["fx_macro_param_ids"] = found_ids
-    print(f"  ⚡ FX macros mapped: {found_count}/8")
+    log.info(f"FX macros mapped: {found_count}/8")
     for i, (n, pid) in enumerate(zip(found_names, found_ids)):
         marker = "" if n else "  ⚠ NOT FOUND"
-        print(f"     slot {i}: param[{pid}] = {n!r}{marker}")
+        log.info(f"  slot {i}: param[{pid}] = {n!r}{marker}")
 
 def on_fx_macro_values(address, *args):
     params = _extract_fx_param_list(args)
@@ -270,7 +295,7 @@ def on_fx_macro_values(address, *args):
             st.state["fx_baseline_ready"]       = True
             st.state["fx_baseline_captured_at"] = time.perf_counter()
             st.state["last_action"]             = "✓ Baseline auto-captured on startup"
-            print(f"  ✓ Baseline auto-captured: {[round(v,2) for v in new_values]}")
+            log.info(f"Baseline auto-captured: {[round(v,2) for v in new_values]}")
 
 def on_fx_macro_mins(address, *args):
     params = _extract_fx_param_list(args)
@@ -388,10 +413,10 @@ def on_eq_macro_names(address, *args):
     with st._lock:
         st.state["eq_macro_names"]     = found_names
         st.state["eq_macro_param_ids"] = found_ids
-    print(f"  ◇ EQ macros mapped: {found_count}/3")
+    log.info(f"EQ macros mapped: {found_count}/3")
     for i, (n, pid) in enumerate(zip(found_names, found_ids)):
         marker = "" if n else "  ⚠ NOT FOUND"
-        print(f"     slot {i}: param[{pid}] = {n!r}{marker}")
+        log.info(f"  slot {i}: param[{pid}] = {n!r}{marker}")
 
 def on_eq_macro_values(address, *args):
     params = _extract_eq_param_list(args)
@@ -537,8 +562,8 @@ def start_osc_server():
     try:
         st._osc_server = ThreadingOSCUDPServer((OSC_HOST, OSC_RECEIVE_PORT), d)
     except OSError as e:
-        print(f"  ❌ OSC receiver could not bind to port {OSC_RECEIVE_PORT}: {e}")
+        log.error(f"OSC receiver could not bind to port {OSC_RECEIVE_PORT}: {e}")
         return
 
-    print(f"  ✅ OSC receiver ← {OSC_HOST}:{OSC_RECEIVE_PORT}")
+    log.info(f"OSC receiver listening ← {OSC_HOST}:{OSC_RECEIVE_PORT}")
     st._osc_server.serve_forever()

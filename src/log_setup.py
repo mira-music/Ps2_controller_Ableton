@@ -157,3 +157,32 @@ def get_logger(module_name: str) -> logging.Logger:
         clean_name = "fxmachine." + module_name
 
     return logging.getLogger(clean_name)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  UNCAUGHT EXCEPTION HANDLER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def install_crash_handler():
+    """
+    Hook Python's exception system so any uncaught exception is logged
+    BEFORE the process dies. Critical for diagnosing crashes after a show.
+    
+    Should be called once at startup, right after init_logging().
+    KeyboardInterrupt (Ctrl+C) is NOT logged as a crash — it's a clean exit.
+    """
+    import sys
+    import traceback
+
+    crash_log = get_logger("fxmachine.crash")
+
+    def _handler(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        crash_log.critical(
+            "UNCAUGHT EXCEPTION — app is about to die:\n" +
+            "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        )
+
+    sys.excepthook = _handler

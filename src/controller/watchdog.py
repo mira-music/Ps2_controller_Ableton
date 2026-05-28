@@ -3,14 +3,7 @@
   src/controller/watchdog.py — Controller Health + Recovery
 ================================================================================
   Auto-detects gamepad connection state, reprobes after silent
-  disconnects, and reconciles ghost button-up events (a common
-  pygame issue where SELECT release events get dropped).
-
-  Functions:
-    soft_check_controller()       — non-disruptive health check
-    reprobe_controller(reason)    — full re-init via pygame.joystick
-    watchdog_loop()               — daemon thread (1 Hz) monitoring health
-    reconcile_select_state(ctrl)  — force-release SELECT if ghost detected
+  disconnects, and reconciles ghost button-up events.
 ================================================================================
 """
 
@@ -23,6 +16,9 @@ from src.config import (
     SELECT_RECONCILE_INTERVAL,
     BTN_SELECT,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  SOFT HEALTH CHECK
@@ -62,7 +58,7 @@ def reprobe_controller(reason="watchdog"):
                 st.state["controller_name"]      = "—"
                 st.state["_last_reprobe"]        = time.perf_counter()
             if was_connected:
-                print(f"  ⚠  Controller LOST ({reason})")
+                log.warning(f"Controller LOST ({reason})")
             return None
 
         ctrl = pygame.joystick.Joystick(0)
@@ -77,7 +73,7 @@ def reprobe_controller(reason="watchdog"):
             st.state["_last_reprobe"]        = time.perf_counter()
 
         if not was_connected:
-            print(f"  ✅ Controller FOUND: {name}  ({reason})")
+            log.info(f"Controller FOUND: {name}  ({reason})")
         return ctrl
 
     except Exception as e:
@@ -86,7 +82,7 @@ def reprobe_controller(reason="watchdog"):
             st.state["controller_connected"] = False
             st.state["controller_name"]      = "—"
             st.state["_last_reprobe"]        = time.perf_counter()
-        print(f"  ⚠  Controller re-probe error ({reason}): {e}")
+        log.error(f"Controller re-probe error ({reason}): {e}")
         return None
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -119,11 +115,11 @@ def watchdog_loop():
                     with st._lock:
                         st.state["_last_reprobe"] = now
                 else:
-                    print(f"  ⚠  Soft check failed after {idle_for:.1f}s idle — full reprobe")
+                    log.warning(f"Soft check failed after {idle_for:.1f}s idle — full reprobe")
                     reprobe_controller(reason=f"silent disconnect ({idle_for:.1f}s idle)")
 
         except Exception as e:
-            print(f"  ⚠  Watchdog error: {e}")
+            log.error(f"Watchdog error: {e}")
             time.sleep(1.0)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -154,4 +150,4 @@ def reconcile_select_state(controller):
         with st._lock:
             st.state["select_held"] = False
             st.state["last_action"] = "SELECT auto-released (ghost detected)"
-        print("  ⚠  SELECT ghost release detected — force-cleared")
+        log.warning("SELECT ghost release detected — force-cleared")

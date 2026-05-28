@@ -20,6 +20,9 @@ from src.osc.client import (
     osc_launch_clip, osc_stop_clip, osc_stop_track, osc_launch_scene,
     osc_arm_track, osc_play, osc_stop, osc_set_volume, osc_set_fx_macro,
 )
+from src.log_setup import get_logger
+
+log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIP / SCENE / TRACK
@@ -99,7 +102,6 @@ def action_volume_mute_toggle():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def action_force_refresh():
-    # Import here to avoid circular import
     from src.osc.discovery import fetch_all_names
     from src.controller.watchdog import reprobe_controller
 
@@ -123,21 +125,21 @@ def action_save_baseline():
         st.state["fx_baseline_ready"]       = True
         st.state["fx_baseline_captured_at"] = time.perf_counter()
         st.state["last_action"]             = "✓ Baseline SAVED"
-    print(f"  ✓ Baseline manually saved: {[round(v,2) for v in current]}")
+    log.info(f"Baseline manually saved: {[round(v,2) for v in current]}")
 
 def action_toggle_filter_lock():
     with st._lock:
         st.state["fx_filter_locked"] = not st.state["fx_filter_locked"]
         locked = st.state["fx_filter_locked"]
         st.state["last_action"] = "🔒 Filter LOCKED" if locked else "🔓 Filter unlocked"
-    print(f"  {'🔒 FILTER LOCK ON' if locked else '🔓 FILTER LOCK OFF'}")
+    log.info(f"{'FILTER LOCK ON' if locked else 'FILTER LOCK OFF'}")
 
 def action_toggle_wet_lock():
     with st._lock:
         st.state["fx_wet_locked"] = not st.state["fx_wet_locked"]
         locked = st.state["fx_wet_locked"]
         st.state["last_action"] = "🔒 Wet LOCKED" if locked else "🔓 Wet unlocked"
-    print(f"  {'🔒 WET LOCK ON' if locked else '🔓 WET LOCK OFF'}")
+    log.info(f"{'WET LOCK ON' if locked else 'WET LOCK OFF'}")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FX RECOVERY ON L1 RELEASE
