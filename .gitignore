@@ -25,6 +25,10 @@ desktop.ini
 # Logs
 *.log
 
+# Log files (generated at runtime)
+logs/
+*.log
+
 # Backup files
 *.backup
 *.bak
