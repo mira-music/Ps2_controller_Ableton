@@ -10,6 +10,10 @@
     5. Left stick always drives navigation
     6. D-pad routed by current layer
     7. Sleeps 8ms → ~125 Hz polling rate
+
+  Error handling distinguishes:
+    - pygame.error "not initialized" → app is shutting down, exit cleanly
+    - All other errors → log and recover (reset controller state, sleep, retry)
 ================================================================================
 """
 
@@ -112,10 +116,20 @@ def controller_loop():
             clear_flashes_if_expired()
             pygame.time.wait(8)
 
-        except Exception as e:
-            log.error(f"Controller loop error: {e}")
+        except pygame.error as e:
+            # pygame.error usually means the joystick was momentarily quit
+            # by a reprobe in another thread. Don't exit — recover by clearing
+            # the handle so the next loop iteration triggers a reprobe via the
+            # watchdog. Only exit if we detect a true shutdown.
+            err_msg = str(e)
+            with st._lock:
+                shutting_down = (st._osc_server is None)
+            if shutting_down:
+                log.info(f"Controller loop exiting cleanly (shutdown): {err_msg}")
+                return
+            log.warning(f"Controller transient error (will recover): {err_msg}")
             st._set_controller_handle(None)
             with st._lock:
                 st.state["controller_connected"] = False
                 st.state["controller_name"]      = "—"
-            time.sleep(0.3)
+            time.sleep(0.5)

@@ -118,6 +118,50 @@ def action_force_refresh():
       1. Reload TOML config (hot-reloadable values applied immediately,
          restart-required values flagged for the next launch)
       2. Re-fetch Ableton session (track names, scenes, colors, etc.)
+      3. Re-probe controller ONLY if it's actually broken (avoids race
+         conditions with the running controller loop)
+    """
+    from src.osc.discovery import fetch_all_names
+    from src.controller.watchdog import reprobe_controller, soft_check_controller
+    from src.config_loader import reload_config
+
+    # 1. Reload TOML config first — fast, in-process
+    result = reload_config()
+
+    # Build a user-friendly summary of what happened
+    if not result["success"]:
+        config_msg = f"⚠ Config reload failed: {result['error']}"
+    elif not result["changes_applied"] and not result["restart_required"]:
+        config_msg = "✓ Config reload — no changes detected"
+    else:
+        applied = len(result["changes_applied"])
+        restart = len(result["restart_required"])
+        if restart > 0:
+            config_msg = (
+                f"✓ Config reload — {applied} applied, "
+                f"⚠ {restart} need restart"
+            )
+        else:
+            config_msg = f"✓ Config reload — {applied} values applied"
+
+    # 2. Refresh Ableton session in background
+    with st._lock:
+        st.state["last_action"] = f"🔄 {config_msg}"
+    threading.Thread(target=fetch_all_names, daemon=True).start()
+
+    # 3. Only reprobe controller if it's actually unhealthy.
+    # The watchdog handles silent disconnects on its own; reprobing a
+    # healthy controller mid-session causes race conditions with the
+    # running controller_loop's event reading (Joystick not initialized).
+    if not soft_check_controller():
+        log.info("Controller looks unhealthy, requesting reprobe")
+        threading.Thread(target=reprobe_controller, daemon=True,
+                         kwargs={"reason": "manual refresh"}).start()
+    """
+    SELECT+START or ⟳ REFRESH button:
+      1. Reload TOML config (hot-reloadable values applied immediately,
+         restart-required values flagged for the next launch)
+      2. Re-fetch Ableton session (track names, scenes, colors, etc.)
       3. Re-probe the controller (in case it silently disconnected)
     """
     from src.osc.discovery import fetch_all_names
