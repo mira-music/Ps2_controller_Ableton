@@ -81,14 +81,17 @@ EQ_BASS_BOOST_CAP     = 114.0
 
 # Encoder-style continuous control
 EQ_AXIS_DEAD_ZONE     = 0.18
-EQ_SWEEP_SECONDS      = 0.6     # v9.11: fast overall sweep
-EQ_SMOOTHING_FACTOR   = 0.40
-EQ_DOMINANCE_RATIO    = 1.3
-EQ_ENCODER_CURVE_EXP  = 1.2     # v9.11: slight easing at start, mostly linear
+EQ_SWEEP_SECONDS      = 0.30   # was 0.6 — twice as fast across full range
+EQ_SMOOTHING_FACTOR   = 0.55   # was 0.40 — snappier stick feel
+EQ_ENCODER_CURVE_EXP  = 1.0    # was 1.2 — pure linear, instant proportional response
 
-# Sticky 0 dB detent
-EQ_DETENT_RANGE       = 3.0
-EQ_DETENT_MIN_FACTOR  = 0.15
+# Axis separation
+EQ_DOMINANCE_RATIO    = 3.0    # was 1.3 — Y must be 3x stronger than X to dominate
+
+
+# Detent — tighter and less sticky
+EQ_DETENT_RANGE       = 1.0    # was 3.0 — only triggers within 1 macro unit of 0dB
+EQ_DETENT_MIN_FACTOR  = 0.30   # was 0.15 — 30% speed instead of 15%, less drag
 
 # DJM-900 style channel meter (real audio output level)
 EQ_METER_SEGMENTS     = 24
@@ -98,10 +101,10 @@ EQ_METER_RED          = 3
 EQ_METER_PEAK_HOLD_S  = 1.5
 EQ_METER_PEAK_FALL    = 0.8
 
-# Double-flick gesture detection
-EQ_FLICK_EXTREME      = 0.85
-EQ_FLICK_RETURN       = 0.30
-EQ_FLICK_TIMEOUT_MS   = 500     # v9.11: snappier double-flick window
+# Double-flick — require more decisive gestures
+EQ_FLICK_EXTREME      = 0.90   # was 0.85 — must fully push to 90% to arm
+EQ_FLICK_RETURN       = 0.22   # was 0.30 — must return closer to center
+EQ_FLICK_TIMEOUT_MS   = 380    # was 500 — tighter window, be decisive
 
 # Animated ramp (60Hz thread)
 EQ_RAMP_MIN_MS        = 30
@@ -155,7 +158,8 @@ FX_DELAY_FB_DEBOUNCE   = 0.18
 FX_WRITE_THROTTLE      = 0.025
 FX_WRITE_EPSILON_FRAC  = 0.001
 
-EQ_WRITE_THROTTLE      = 0.020
+# Speed
+EQ_WRITE_THROTTLE     = 0.015  # was 0.020 — more frequent OSC writes
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  RIGHT STICK ROTATION
