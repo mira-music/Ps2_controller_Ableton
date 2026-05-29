@@ -59,6 +59,10 @@ def main():
     log.info(f"  © Ayoub Agoujdad. Trademark registered. Non-commercial only.")
     log.info("=" * 64)
 
+    # ─── LOAD TOML CONFIG (after logging, before anything else) ───
+    from src.config_loader import init_config
+    init_config()
+
     setup_osc()
 
     threading.Thread(target=start_osc_server, daemon=True).start()

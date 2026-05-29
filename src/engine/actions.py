@@ -102,11 +102,39 @@ def action_volume_mute_toggle():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def action_force_refresh():
+    """
+    SELECT+START or ⟳ REFRESH button:
+      1. Reload TOML config (hot-reloadable values applied immediately,
+         restart-required values flagged for the next launch)
+      2. Re-fetch Ableton session (track names, scenes, colors, etc.)
+      3. Re-probe the controller (in case it silently disconnected)
+    """
     from src.osc.discovery import fetch_all_names
     from src.controller.watchdog import reprobe_controller
+    from src.config_loader import reload_config
 
+    # 1. Reload TOML config first — fast, in-process
+    result = reload_config()
+
+    # Build a user-friendly summary of what happened
+    if not result["success"]:
+        config_msg = f"⚠ Config reload failed: {result['error']}"
+    elif not result["changes_applied"] and not result["restart_required"]:
+        config_msg = "✓ Config reload — no changes detected"
+    else:
+        applied = len(result["changes_applied"])
+        restart = len(result["restart_required"])
+        if restart > 0:
+            config_msg = (
+                f"✓ Config reload — {applied} applied, "
+                f"⚠ {restart} need restart"
+            )
+        else:
+            config_msg = f"✓ Config reload — {applied} values applied"
+
+    # 2 + 3. Kick off Ableton refresh + controller reprobe in background
     with st._lock:
-        st.state["last_action"] = "🔄 Full refresh (Ableton + colours + controller)…"
+        st.state["last_action"] = f"🔄 {config_msg}"
     threading.Thread(target=fetch_all_names,    daemon=True).start()
     threading.Thread(target=reprobe_controller, daemon=True,
                      kwargs={"reason": "manual refresh"}).start()
