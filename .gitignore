@@ -40,3 +40,6 @@ logs/
 build/
 dist/
 *.spec
+
+#My one Shoot Script
+v9_11.py
