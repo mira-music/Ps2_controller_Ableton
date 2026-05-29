@@ -62,7 +62,7 @@
 # Going below 0.15 will make tiny stick movements jump too much.
 # Going above 2.00 will feel sluggish during a live drop.
 #
-sweep_seconds = 0.30
+sweep_seconds = 0.3
 
 # [LIVE] How the stick deflection translates to encoder speed.
 #
@@ -343,6 +343,9 @@ mid_high_boost_pct = 0.15
 #  Selected in EQ mode via the Y double-flick rotation:
 #     MID → HIGH → TRIM → LOW → MID → ...
 #
+#  Double-flicks on TRIM only NORMALIZE to 0 dB (no kill, no boost
+#  stacking). The +9 dB hard cap IS the safety mechanism.
+#
 [trim]
 
 # [LIVE] Time (in seconds) to sweep across the full TRIM range.
@@ -355,7 +358,7 @@ mid_high_boost_pct = 0.15
 #   0.40 = balanced
 #   0.80 = slow, careful
 #
-sweep_seconds = 0.25
+sweep_seconds = 0.4
 
 # [LIVE] Curve shape (same logic as eq.encoder.curve_exp above).
 # TRIM defaults to 1.0 (pure linear) for instant proportional response.
@@ -385,9 +388,6 @@ write_epsilon = 0.15
 # [LIVE] Detent at 0 dB (same logic as eq.detent).
 detent_range = 1.0
 detent_min_factor = 0.30
-
-
-
 # =============================================================================
 #  [meter] — DJM-style channel level meter
 # =============================================================================

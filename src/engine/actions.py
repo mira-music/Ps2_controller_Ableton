@@ -6,8 +6,8 @@
   state and dispatch OSC. No input handling — that's controller.buttons.
 
   All tunable values read from cfg (hot-reloadable via SELECT+START):
-    cfg.R3_DOUBLE_CLICK_WINDOW  — window for double-click mute on SELECT+R3
-    cfg.ABLETON_UNITY           — Ableton's unity-gain volume position
+    cfg.R3_DOUBLE_CLICK_WINDOW
+    cfg.ABLETON_UNITY
 ================================================================================
 """
 
@@ -16,7 +16,6 @@ import threading
 
 from src import state as st
 from src.config import (
-    # Architectural constants — never change at runtime
     FX_RECOVERY_BEHAVIOUR, FX_SLOT_FX_SEND, FX_SEND_DRY_VALUE,
     FX_RECOVERY_FLASH_S,
 )
@@ -28,6 +27,7 @@ from src.osc.client import (
 from src.log_setup import get_logger
 
 log = get_logger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  CLIP / SCENE / TRACK
@@ -41,15 +41,18 @@ def action_launch_clip():
         st.state["last_action"] = "▶  Launch Clip"
     osc_launch_clip()
 
+
 def action_stop_clip():
     with st._lock:
         st.state["last_action"] = "■  Stop Clip"
     osc_stop_clip()
 
+
 def action_stop_track():
     with st._lock:
         st.state["last_action"] = "⏹  Stop Track"
     osc_stop_track()
+
 
 def action_launch_scene():
     with st._lock:
@@ -59,10 +62,12 @@ def action_launch_scene():
         st.state["last_action"] = "▶▶ Launch Scene"
     osc_launch_scene()
 
+
 def action_arm_track():
     with st._lock:
         st.state["last_action"] = "●  Arm Track"
     osc_arm_track()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TRANSPORT
@@ -80,6 +85,7 @@ def action_transport_toggle():
         with st._lock:
             st.state["last_action"] = "▶  Transport Play"
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  VOLUME MUTE (SELECT+R3)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -88,10 +94,6 @@ def action_volume_mute_toggle():
     """
     SELECT+R3 = volume mute toggle. Single click resets to unity,
     double click within window mutes.
-
-    Reads from cfg (hot-reloadable):
-      cfg.R3_DOUBLE_CLICK_WINDOW
-      cfg.ABLETON_UNITY
     """
     now = time.perf_counter()
     with st._lock:
@@ -108,6 +110,7 @@ def action_volume_mute_toggle():
             vol = cfg.ABLETON_UNITY
     osc_set_volume(vol)
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  FORCE REFRESH (SELECT+START or ⟳ REFRESH button)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -118,8 +121,7 @@ def action_force_refresh():
       1. Reload TOML config (hot-reloadable values applied immediately,
          restart-required values flagged for the next launch)
       2. Re-fetch Ableton session (track names, scenes, colors, etc.)
-      3. Re-probe controller ONLY if it's actually broken (avoids race
-         conditions with the running controller loop)
+      3. Re-probe controller only if it's actually unhealthy
     """
     from src.osc.discovery import fetch_all_names
     from src.controller.watchdog import reprobe_controller, soft_check_controller
@@ -144,55 +146,20 @@ def action_force_refresh():
         else:
             config_msg = f"✓ Config reload — {applied} values applied"
 
+    # Always log the result (UI action line may get overwritten by Ableton refresh)
+    log.info(f"Config reload result: {config_msg}")
+
     # 2. Refresh Ableton session in background
     with st._lock:
         st.state["last_action"] = f"🔄 {config_msg}"
     threading.Thread(target=fetch_all_names, daemon=True).start()
 
-    # 3. Only reprobe controller if it's actually unhealthy.
-    # The watchdog handles silent disconnects on its own; reprobing a
-    # healthy controller mid-session causes race conditions with the
-    # running controller_loop's event reading (Joystick not initialized).
+    # 3. Only reprobe controller if unhealthy
     if not soft_check_controller():
         log.info("Controller looks unhealthy, requesting reprobe")
         threading.Thread(target=reprobe_controller, daemon=True,
                          kwargs={"reason": "manual refresh"}).start()
-    """
-    SELECT+START or ⟳ REFRESH button:
-      1. Reload TOML config (hot-reloadable values applied immediately,
-         restart-required values flagged for the next launch)
-      2. Re-fetch Ableton session (track names, scenes, colors, etc.)
-      3. Re-probe the controller (in case it silently disconnected)
-    """
-    from src.osc.discovery import fetch_all_names
-    from src.controller.watchdog import reprobe_controller
-    from src.config_loader import reload_config
 
-    # 1. Reload TOML config first — fast, in-process
-    result = reload_config()
-
-    # Build a user-friendly summary of what happened
-    if not result["success"]:
-        config_msg = f"⚠ Config reload failed: {result['error']}"
-    elif not result["changes_applied"] and not result["restart_required"]:
-        config_msg = "✓ Config reload — no changes detected"
-    else:
-        applied = len(result["changes_applied"])
-        restart = len(result["restart_required"])
-        if restart > 0:
-            config_msg = (
-                f"✓ Config reload — {applied} applied, "
-                f"⚠ {restart} need restart"
-            )
-        else:
-            config_msg = f"✓ Config reload — {applied} values applied"
-
-    # 2 + 3. Kick off Ableton refresh + controller reprobe in background
-    with st._lock:
-        st.state["last_action"] = f"🔄 {config_msg}"
-    threading.Thread(target=fetch_all_names,    daemon=True).start()
-    threading.Thread(target=reprobe_controller, daemon=True,
-                     kwargs={"reason": "manual refresh"}).start()
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  BASELINE & LOCKS
@@ -210,6 +177,7 @@ def action_save_baseline():
         st.state["last_action"]             = "✓ Baseline SAVED"
     log.info(f"Baseline manually saved: {[round(v,2) for v in current]}")
 
+
 def action_toggle_filter_lock():
     with st._lock:
         st.state["fx_filter_locked"] = not st.state["fx_filter_locked"]
@@ -217,12 +185,14 @@ def action_toggle_filter_lock():
         st.state["last_action"] = "🔒 Filter LOCKED" if locked else "🔓 Filter unlocked"
     log.info(f"{'FILTER LOCK ON' if locked else 'FILTER LOCK OFF'}")
 
+
 def action_toggle_wet_lock():
     with st._lock:
         st.state["fx_wet_locked"] = not st.state["fx_wet_locked"]
         locked = st.state["fx_wet_locked"]
         st.state["last_action"] = "🔒 Wet LOCKED" if locked else "🔓 Wet unlocked"
     log.info(f"{'WET LOCK ON' if locked else 'WET LOCK OFF'}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FX RECOVERY ON L1 RELEASE

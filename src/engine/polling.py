@@ -1,50 +1,35 @@
 """
 ================================================================================
-  src/engine/polling.py — Background Polling + EQ Ramp Animation
+  src/engine/polling.py — Polling + EQ Ramp Animation
 ================================================================================
   Two daemon threads:
-    polling_loop()  — periodic queries to Ableton (BPM, transport, volume,
-                      safety polls, session size detection at ~6.6 Hz)
-    eq_ramp_loop()  — animates EQ value changes for double-flick actions
-                      at ~60 Hz with cubic ease-out
 
-  Tunable values from cfg:
-    cfg.QUERY_DEFER_TIME        [LIVE]    deferred query delay
-    cfg.FX_SAFETY_POLL_INTERVAL [LIVE]    safety re-query interval
-    cfg.EQ_RAMP_MIN_MS          [LIVE]    fastest ramp duration
-    cfg.EQ_RAMP_MAX_MS          [LIVE]    slowest ramp duration
+  1. polling_loop() — ~6.6 Hz
+       Periodic OSC queries (BPM, transport, volume, FX/EQ safety polls).
+       Detects session size changes and triggers rebuild.
 
-  Note: EQ_RAMP_TICK_MS is read once at thread start (used in time.sleep).
-        Changing it via TOML requires app restart.
+  2. eq_ramp_loop() — ~60 Hz
+       Animates EQ value changes triggered by double-flick actions
+       (kill, normalize, boost, restore). Cubic ease-out curve.
+
+  Build B: ramp arrays now sized for 4 macros (Low, Mid, High, TRIM).
 ================================================================================
 """
 
-import math
 import time
 import threading
-
 from src import state as st
 from src.config import (
-    # Architectural constant — thread tick rate read once at startup
     EQ_RAMP_TICK_MS,
+    EQ_MACRO_COUNT,
 )
 from src.config_loader import cfg
 from src.helpers import clamp
-from src.osc.client import (
-    osc_query_position, osc_query_fx_macro_values, osc_query_eq_macro_values,
-    osc_set_eq_macro,
-)
+from src.osc.client import osc_set_eq_macro
 from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  MODULE-LEVEL TRACKERS
-# ═══════════════════════════════════════════════════════════════════════════
-
-_last_known_track_count = 0
-_last_known_scene_count = 0
-_last_fx_safety_poll    = 0.0
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  POLLING LOOP
@@ -52,160 +37,168 @@ _last_fx_safety_poll    = 0.0
 
 def polling_loop():
     """
-    Background polling thread. Runs at ~6.6 Hz (150ms sleep).
-    Periodically queries Ableton for state that doesn't push via listeners.
+    Periodic OSC queries to Ableton.
+    - BPM, transport state: every poll (~150 ms)
+    - Track volume: every poll
+    - FX/EQ safety polls: every cfg.FX_SAFETY_POLL_INTERVAL (default 2s)
+    - Session size: every poll (cheap)
 
-    Reads from cfg (hot-reloadable):
-      cfg.QUERY_DEFER_TIME        — debounce for position queries
-      cfg.FX_SAFETY_POLL_INTERVAL — re-sync FX/EQ values periodically
+    Defers position queries via _query_requested_at to debounce navigation.
     """
-    global _last_known_track_count, _last_known_scene_count, _last_fx_safety_poll
-    from src.osc.discovery import fetch_all_names
+    from src.osc.client import (
+        osc_query_position, osc_query_fx_macro_values, osc_query_eq_macro_values,
+    )
+    from src.osc.discovery import rebuild_bookmarks, rebuild_groups
 
-    tick = 0
+    last_known_track_count = -1
+    last_known_scene_count = -1
+    last_fx_safety_poll    = 0.0
 
     while True:
         try:
+            time.sleep(0.15)
             now = time.perf_counter()
 
             with st._lock:
-                req = st.state["_query_requested_at"]
-            if req > 0 and (now - req) >= cfg.QUERY_DEFER_TIME:
+                requested_at = st.state["_query_requested_at"]
+                tc = st.state["_real_track_count"]
+                sc = st.state["_real_scene_count"]
+
+            # Always poll BPM + transport + volume + session counts
+            st.osc.send_message("/live/song/get/tempo", [])
+            st.osc.send_message("/live/song/get/is_playing", [])
+            st.osc.send_message("/live/song/get/num_tracks", [])
+            st.osc.send_message("/live/song/get/num_scenes", [])
+
+            with st._lock:
+                track_idx = st.state["track"]
+            st.osc.send_message("/live/track/get/volume", [track_idx])
+
+            # Deferred position query (debounced after navigation)
+            if requested_at > 0 and (now - requested_at) >= cfg.QUERY_DEFER_TIME:
                 osc_query_position()
                 with st._lock:
                     st.state["_query_requested_at"] = 0.0
 
-            if tick % 7 == 0:
-                st.osc.send_message("/live/song/get/tempo",      [])
-                time.sleep(0.02)
-                st.osc.send_message("/live/song/get/is_playing", [])
-                time.sleep(0.02)
+            # Safety re-poll FX/EQ macro values (catches manual Ableton changes)
+            if (now - last_fx_safety_poll) >= cfg.FX_SAFETY_POLL_INTERVAL:
+                osc_query_fx_macro_values()
+                osc_query_eq_macro_values()
+                last_fx_safety_poll = now
 
-            if tick % 5 == 0:
-                with st._lock:
-                    track = st.state["track"]
-                st.osc.send_message("/live/track/get/volume", [track])
-                time.sleep(0.02)
-
-            if now - _last_fx_safety_poll >= cfg.FX_SAFETY_POLL_INTERVAL:
-                with st._lock:
-                    fx_idx = st.state["fx_track_index"]
-                    eq_idx = st.state["eq_track_index"]
-                if fx_idx >= 0:
-                    osc_query_fx_macro_values()
-                if eq_idx >= 0:
-                    osc_query_eq_macro_values()
-                _last_fx_safety_poll = now
-
-            if tick % 50 == 0:
-                st.osc.send_message("/live/song/get/num_tracks", [])
-                st.osc.send_message("/live/song/get/num_scenes", [])
-                time.sleep(0.1)
-
-                with st._lock:
-                    tc = st.state["_real_track_count"]
-                    sc = st.state["_real_scene_count"]
-
-                if tc != _last_known_track_count or sc != _last_known_scene_count:
-                    if _last_known_track_count != 0:
-                        log.info(
-                            f"Session changed "
-                            f"({tc} tracks, {sc} scenes) — rescanning…"
-                        )
-                        threading.Thread(
-                            target=fetch_all_names, daemon=True
-                        ).start()
-                    _last_known_track_count = tc
-                    _last_known_scene_count = sc
-
-            tick += 1
-            time.sleep(0.15)
+            # Detect session size changes
+            if tc != last_known_track_count or sc != last_known_scene_count:
+                if last_known_track_count > 0 or last_known_scene_count > 0:
+                    log.info(f"Session size changed: {tc} tracks, {sc} scenes")
+                    # Rebuild bookmarks/groups in case track/scene order changed
+                    rebuild_bookmarks()
+                    rebuild_groups()
+                last_known_track_count = tc
+                last_known_scene_count = sc
 
         except Exception as e:
-            log.error(f"Polling error: {e}")
-            time.sleep(1.0)
+            log.warning(f"Polling iteration error: {e}")
+            time.sleep(0.5)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  EQ RAMP ANIMATION — DEDICATED 60Hz THREAD
+#  EQ RAMP ANIMATION LOOP
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_ramp_loop():
     """
-    Dedicated thread for EQ ramp animation at ~60 Hz.
+    Background thread that animates active EQ value ramps.
+    Runs at ~60 Hz (EQ_RAMP_TICK_MS = 16ms).
 
-    Note: EQ_RAMP_TICK_MS is read ONCE at thread start. Changing it via
-    TOML requires app restart (which is why it's marked [RESTART]).
+    For each active ramp:
+      - Computes progress (0.0 → 1.0) based on elapsed time
+      - Applies cubic ease-out: eased = 1 - (1 - progress)^3
+      - Interpolates start → target by eased fraction
+      - Writes to state + sends OSC
+
+    When progress reaches 1.0, the ramp is marked inactive.
+
+    Build B: iterates over EQ_MACRO_COUNT slots (4 instead of 3).
     """
-    tick_interval = EQ_RAMP_TICK_MS / 1000.0
+    tick_s = EQ_RAMP_TICK_MS / 1000.0
 
     while True:
         try:
-            time.sleep(tick_interval)
-            tick_eq_ramps()
-        except Exception as e:
-            log.error(f"EQ ramp loop error: {e}")
-            time.sleep(0.5)
+            time.sleep(tick_s)
+            now = time.perf_counter()
 
-def tick_eq_ramps():
+            # Snapshot ramp state under lock
+            with st._lock:
+                active_flags = list(st.state["_eq_ramp_active"])
+
+            # Process each active ramp
+            for slot in range(EQ_MACRO_COUNT):
+                if not active_flags[slot]:
+                    continue
+
+                with st._lock:
+                    start_val = st.state["_eq_ramp_start_val"][slot]
+                    target    = st.state["_eq_ramp_target_val"][slot]
+                    start_t   = st.state["_eq_ramp_start_time"][slot]
+                    duration  = st.state["_eq_ramp_duration"][slot]
+
+                if duration <= 0:
+                    with st._lock:
+                        st.state["_eq_ramp_active"][slot] = False
+                    continue
+
+                elapsed = now - start_t
+                progress = clamp(elapsed / duration, 0.0, 1.0)
+
+                # Cubic ease-out
+                eased = 1.0 - (1.0 - progress) ** 3
+                current_val = start_val + (target - start_val) * eased
+
+                # Write to state + OSC
+                with st._lock:
+                    st.state["eq_macro_values"][slot] = current_val
+
+                osc_set_eq_macro(slot, current_val)
+
+                # End ramp on completion
+                if progress >= 1.0:
+                    with st._lock:
+                        st.state["_eq_ramp_active"][slot] = False
+                        st.state["eq_macro_values"][slot] = target
+                    osc_set_eq_macro(slot, target)
+
+        except Exception as e:
+            log.warning(f"EQ ramp iteration error: {e}")
+            time.sleep(0.1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  RAMP STARTER (called from engine/eq.py kill/normalize/boost/restore actions)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def start_eq_ramp(band, target_value, flick_duration_s):
     """
-    Update active EQ ramps at ~60 Hz.
-    Cubic ease-out for smoother, click-free transitions.
+    Start an animated ramp for the given band.
+
+    Ramp duration scales with how fast you flicked:
+      Fast flick (30 ms between extremes) → cfg.EQ_RAMP_MIN_MS ramp (snappy)
+      Slow flick (200 ms between extremes) → cfg.EQ_RAMP_MAX_MS ramp (smooth)
+      Linear interpolation in between.
     """
-    with st._lock:
-        active_any = any(st.state["_eq_ramp_active"])
-    if not active_any:
-        return
+    # Clamp flick duration to a sensible range
+    flick_ms = clamp(flick_duration_s * 1000.0, 30.0, 200.0)
+
+    # Linear interpolation: flick_ms 30→200 maps to ramp MIN→MAX
+    fraction = (flick_ms - 30.0) / (200.0 - 30.0)
+    fraction = clamp(fraction, 0.0, 1.0)
+    ramp_ms = cfg.EQ_RAMP_MIN_MS + fraction * (cfg.EQ_RAMP_MAX_MS - cfg.EQ_RAMP_MIN_MS)
+    ramp_s = ramp_ms / 1000.0
 
     now = time.perf_counter()
-    writes = []
-
     with st._lock:
-        for slot in range(3):
-            if not st.state["_eq_ramp_active"][slot]:
-                continue
-
-            start_val   = st.state["_eq_ramp_start_val"][slot]
-            target_val  = st.state["_eq_ramp_target_val"][slot]
-            start_time  = st.state["_eq_ramp_start_time"][slot]
-            duration    = st.state["_eq_ramp_duration"][slot]
-
-            elapsed = now - start_time
-            if elapsed >= duration:
-                final_val = target_val
-                st.state["_eq_ramp_active"][slot] = False
-                st.state["eq_macro_values"][slot] = final_val
-                writes.append((slot, final_val))
-            else:
-                progress = elapsed / duration
-                eased = 1.0 - (1.0 - progress) ** 3
-                current_val = start_val + (target_val - start_val) * eased
-                st.state["eq_macro_values"][slot] = current_val
-                writes.append((slot, current_val))
-
-    for slot, val in writes:
-        osc_set_eq_macro(slot, val)
-
-def start_eq_ramp(slot, target_val, flick_duration_s):
-    """
-    Start an animated ramp for an EQ band.
-    Duration scales linearly with flick speed:
-      fast flick (30ms)  → cfg.EQ_RAMP_MIN_MS ramp
-      slow flick (200ms) → cfg.EQ_RAMP_MAX_MS ramp
-
-    Reads from cfg (hot-reloadable):
-      cfg.EQ_RAMP_MIN_MS
-      cfg.EQ_RAMP_MAX_MS
-    """
-    fd_ms = flick_duration_s * 1000.0
-    fd_clamped = clamp(fd_ms, 30.0, 200.0)
-    t = (fd_clamped - 30.0) / 170.0
-    ramp_ms = cfg.EQ_RAMP_MIN_MS + t * (cfg.EQ_RAMP_MAX_MS - cfg.EQ_RAMP_MIN_MS)
-    ramp_duration_s = ramp_ms / 1000.0
-
-    with st._lock:
-        current_val = st.state["eq_macro_values"][slot]
-        st.state["_eq_ramp_active"][slot]     = True
-        st.state["_eq_ramp_start_val"][slot]  = current_val
-        st.state["_eq_ramp_target_val"][slot] = target_val
-        st.state["_eq_ramp_start_time"][slot] = time.perf_counter()
-        st.state["_eq_ramp_duration"][slot]   = ramp_duration_s
+        start_val = st.state["eq_macro_values"][band]
+        st.state["_eq_ramp_active"][band]     = True
+        st.state["_eq_ramp_start_val"][band]  = start_val
+        st.state["_eq_ramp_target_val"][band] = target_value
+        st.state["_eq_ramp_start_time"][band] = now
+        st.state["_eq_ramp_duration"][band]   = ramp_s

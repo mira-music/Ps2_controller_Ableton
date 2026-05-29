@@ -1,31 +1,44 @@
 """
 ================================================================================
-  src/engine/eq.py — EQ Mode Engine
+  src/engine/eq.py — EQ Mode Engine (Build B: 4 bands incl. TRIM)
 ================================================================================
-  Full EQ control system:
-    - Mode toggle (R3 in nav layer)
-    - Band selection with wrap-around (3 bands)
-    - Smart kill/normalize (double-flick X LEFT)
-    - Smart restore/boost (double-flick X RIGHT)
-    - Band navigation via double-flick Y (no borders)
-    - Continuous encoder on X with sticky 0 dB detent
 
-  All tunable values read from cfg (hot-reloadable via SELECT+START):
-    cfg.EQ_FLICK_TIMEOUT_MS, cfg.EQ_FLICK_EXTREME, cfg.EQ_FLICK_RETURN
-    cfg.EQ_AXIS_DEAD_ZONE, cfg.EQ_WRITE_THROTTLE, cfg.EQ_WRITE_EPSILON
-    cfg.EQ_DETENT_RANGE, cfg.EQ_DETENT_MIN_FACTOR
-    cfg.EQ_BASS_BOOST_CAP, cfg.EQ_BOOST_PCT
+  Y-axis double-flick rotation (4 positions, no borders):
+    Y up:   MID → HIGH → TRIM → LOW → MID → ...
+    Y down: MID → LOW → TRIM → HIGH → MID → ...
+
+  X-axis double-flick on EQ bands (Low/Mid/High):
+    LEFT  → smart kill / normalize
+    RIGHT → smart restore / boost
+
+  X-axis double-flick on TRIM (conditional — always toward 0 dB):
+    When TRIM > 0 dB:   LEFT normalizes to 0 dB,  RIGHT does nothing
+    When TRIM ≤ 0 dB:   RIGHT normalizes to 0 dB, LEFT does nothing
+    When TRIM = 0 dB:   both do nothing
+
+  X-axis continuous (encoder):
+    On EQ bands: cfg.EQ_* values, sticky 0dB detent, bass safety cap
+    On TRIM:     cfg.TRIM_* values (fluid, slightly slower), hard cap at +9dB
+
+  CALIBRATION NOTE:
+    EQ Three macros: macro 107.9 = 0 dB (logarithmic curve, asymmetric)
+    TRIM (Utility Gain): macro 64.0 = 0 dB (linear above neutral)
+    These are TWO DIFFERENT calibrations. Don't mix them up.
 ================================================================================
 """
 
 import time
-
+import math
 from src import state as st
 from src.config import (
-    # Architectural constants — never change at runtime
+    # EQ Three (bands)
     EQ_NEUTRAL_MACRO, EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_CUT_HALF_MACRO,
-    EQ_SLOT_LOW,
+    # Slot indices + names
+    EQ_SLOT_LOW, EQ_SLOT_MID, EQ_SLOT_HIGH, EQ_SLOT_TRIM,
     EQ_MACRO_NAMES_EXPECTED,
+    EQ_MACRO_COUNT,
+    # Build B: TRIM has its OWN calibration (Utility Gain ≠ EQ Three)
+    TRIM_NEUTRAL_MACRO, TRIM_DB_PER_MACRO,
 )
 from src.config_loader import cfg
 from src.helpers import clamp, eq_encoder_delta
@@ -35,39 +48,73 @@ from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _is_trim(band):
+    """True if the given band index is the TRIM slot."""
+    return band == EQ_SLOT_TRIM
+
+
+def _trim_max_macro():
+    """
+    Convert cfg.TRIM_MAX_DB to a macro value using TRIM's actual calibration.
+
+    Empirical TRIM curve (NOT same as EQ Three!):
+      macro 64.0  → 0 dB neutral
+      macro 80.2  → +9 dB (default cap with TRIM_MAX_DB=9.0)
+      macro 127.0 → +35 dB (Utility Gain max)
+
+    Linear conversion in the boost zone:
+      macro = TRIM_NEUTRAL_MACRO + (target_dB / TRIM_DB_PER_MACRO)
+    """
+    if cfg.TRIM_MAX_DB <= 0.0:
+        return TRIM_NEUTRAL_MACRO
+    macro = TRIM_NEUTRAL_MACRO + (cfg.TRIM_MAX_DB / TRIM_DB_PER_MACRO)
+    return clamp(macro, TRIM_NEUTRAL_MACRO, EQ_MACRO_MAX)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  MODE TOGGLE
 # ═══════════════════════════════════════════════════════════════════════════
 
 def action_toggle_eq_mode():
-    """R3 in nav layer: toggle EQ mode on/off. Resets all gesture state."""
+    """Toggle EQ mode on/off. Called by R3 button (alone) in nav layer."""
     with st._lock:
-        if not st.state["eq_ready"]:
-            st.state["last_action"] = "⚠ EQ not ready (track ~ EQ Macros not found)"
-            return
+        active = not st.state["eq_mode_active"]
+        st.state["eq_mode_active"] = active
+        st.state["_eq_flick_x_state"] = "idle"
+        st.state["_eq_flick_x_dir"]   = 0
+        st.state["_eq_flick_y_state"] = "idle"
+        st.state["_eq_flick_y_dir"]   = 0
+        st.state["eq_armed_band"]     = -1
+        st.state["last_action"]       = "EQ MODE: ON" if active else "EQ MODE: OFF"
 
-        st.state["eq_mode_active"] = not st.state["eq_mode_active"]
-        if st.state["eq_mode_active"]:
-            st.state["_eq_flick_x_state"] = "idle"
-            st.state["_eq_flick_x_dir"]   = 0
-            st.state["_eq_flick_y_state"] = "idle"
-            st.state["_eq_flick_y_dir"]   = 0
-            st.state["eq_armed_band"]     = -1
-            st.state["_eq_encoder_last_tick"] = time.perf_counter()
-            band_name = EQ_MACRO_NAMES_EXPECTED[st.state["eq_selected_band"]]
-            st.state["last_action"] = f"◇ EQ MODE ON — {band_name}  [X=value, Y=switch band]"
-        else:
-            st.state["last_action"] = "◇ EQ MODE OFF"
+    if active:
+        log.info("EQ mode ON")
+    else:
+        log.info("EQ mode OFF")
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BAND SWITCH
+#  BAND SWITCH — uses EQ_MACRO_COUNT (4) for rotation modulus
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_switch_band(direction):
-    """direction: +1 = next (toward HIGH), -1 = prev (toward LOW). Wraps."""
+    """
+    Switch to next/prev band. 4-position rotation including TRIM.
+
+    Rotation order (slot indices):
+      LOW=0, MID=1, HIGH=2, TRIM=3
+
+    Y up   (direction=+1): MID → HIGH → TRIM → LOW → MID → ...
+    Y down (direction=-1): reverse
+    """
     with st._lock:
         cur = st.state["eq_selected_band"]
-        new = (cur + direction) % 3
+        new = (cur + direction) % EQ_MACRO_COUNT
         st.state["eq_selected_band"] = new
         st.state["eq_armed_band"]    = -1
         st.state["_eq_encoder_last_tick"] = time.perf_counter()
@@ -75,30 +122,52 @@ def eq_switch_band(direction):
         st.state["last_action"] = f"◇ → {band_name}"
     log.info(f"EQ band switched to {band_name}")
 
+
 def eq_arm_band(direction):
-    """Visual armed state during first flick (kept for compat — unused in v9.11 nav)."""
+    """Visual armed state during first flick."""
     with st._lock:
         cur = st.state["eq_selected_band"]
-        armed = (cur + direction) % 3
+        armed = (cur + direction) % EQ_MACRO_COUNT
         st.state["eq_armed_band"]  = armed
         st.state["eq_armed_until"] = time.perf_counter() + (cfg.EQ_FLICK_TIMEOUT_MS / 1000.0)
         band_name = EQ_MACRO_NAMES_EXPECTED[armed]
         st.state["last_action"] = f"◇ → {band_name} armed (flick again)"
 
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  VALUE ACTIONS
+#  VALUE ACTIONS — kill / normalize / boost / restore
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_action_kill(band, flick_duration_s):
     """
-    Double-flick LEFT — SMART kill/normalize.
-      - If value > 0 dB → normalize back to 0 dB
-      - If value ≤ 0 dB → KILL (bass = -inf, mid/high = -19 dB)
+    Double-flick LEFT — context-aware.
+
+    EQ bands (Low/Mid/High):
+      if value > 0 dB → normalize to 0 dB
+      if value ≤ 0 dB → KILL (Low = -∞, Mid/High = -19 dB)
+
+    TRIM (conditional — flick toward center only):
+      if value > 0 dB → normalize to 0 dB
+      if value ≤ 0 dB → does NOTHING (already at/below center, LEFT makes no sense)
     """
     with st._lock:
         current = st.state["eq_macro_values"][band]
         band_name = EQ_MACRO_NAMES_EXPECTED[band]
 
+    # ── TRIM-specific logic ──
+    if _is_trim(band):
+        if current > TRIM_NEUTRAL_MACRO + 0.5:
+            # Above 0 dB → LEFT normalizes back to 0
+            start_eq_ramp(band, TRIM_NEUTRAL_MACRO, flick_duration_s)
+            with st._lock:
+                st.state["last_action"] = f"↓ {band_name} → 0 dB"
+        else:
+            # At or below 0 dB → LEFT does nothing
+            with st._lock:
+                st.state["last_action"] = f"✗ {band_name} already at/below 0 dB"
+        return
+
+    # ── EQ band logic ──
     if current > EQ_NEUTRAL_MACRO + 0.5:
         start_eq_ramp(band, EQ_NEUTRAL_MACRO, flick_duration_s)
         with st._lock:
@@ -115,17 +184,38 @@ def eq_action_kill(band, flick_duration_s):
         with st._lock:
             st.state["last_action"] = action_text
 
+
 def eq_action_boost_or_restore(band, flick_duration_s):
     """
-    Double-flick RIGHT — SMART restore/boost.
-      - If value < 0 dB → restore to 0 dB
-      - If value ≥ 0 dB + Mid/High → +N% of remaining headroom (cfg.EQ_BOOST_PCT)
-      - If value ≥ 0 dB + LOW (bass) → BLOCKED (safety)
+    Double-flick RIGHT — context-aware.
+
+    EQ bands (Low/Mid/High):
+      if value < 0 dB → restore to 0 dB
+      if value ≥ 0 dB + Mid/High → asymptotic +15% headroom boost
+      if value ≥ 0 dB + LOW → 🚫 BLOCKED (sub safety)
+
+    TRIM (conditional — flick toward center only):
+      if value < 0 dB → normalize to 0 dB
+      if value ≥ 0 dB → does NOTHING (already at/above center, RIGHT makes no sense)
     """
     with st._lock:
         current = st.state["eq_macro_values"][band]
         band_name = EQ_MACRO_NAMES_EXPECTED[band]
 
+    # ── TRIM-specific logic ──
+    if _is_trim(band):
+        if current < TRIM_NEUTRAL_MACRO - 0.5:
+            # Below 0 dB → RIGHT normalizes back to 0
+            start_eq_ramp(band, TRIM_NEUTRAL_MACRO, flick_duration_s)
+            with st._lock:
+                st.state["last_action"] = f"↑ {band_name} → 0 dB"
+        else:
+            # At or above 0 dB → RIGHT does nothing
+            with st._lock:
+                st.state["last_action"] = f"✗ {band_name} already at/above 0 dB"
+        return
+
+    # ── EQ band logic ──
     if current < EQ_NEUTRAL_MACRO - 0.5:
         start_eq_ramp(band, EQ_NEUTRAL_MACRO, flick_duration_s)
         with st._lock:
@@ -141,6 +231,7 @@ def eq_action_boost_or_restore(band, flick_duration_s):
         with st._lock:
             st.state["last_action"] = f"↑ {band_name} boosted (+{boost:.2f} macro)"
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  X GESTURE — VALUE ACTIONS (double-flick)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -148,13 +239,10 @@ def eq_action_boost_or_restore(band, flick_duration_s):
 def update_eq_x_gesture(stick_x, now):
     """
     X axis double-flick detection for VALUE actions.
-    LEFT  → eq_action_kill (smart: normalize if above 0 dB, kill if at/below)
+    LEFT  → eq_action_kill
     RIGHT → eq_action_boost_or_restore
 
-    Reads from cfg (hot-reloadable):
-      cfg.EQ_FLICK_TIMEOUT_MS
-      cfg.EQ_FLICK_EXTREME
-      cfg.EQ_FLICK_RETURN
+    On TRIM: conditional — only the direction TOWARD 0 dB works.
 
     Returns True if gesture in progress (caller pauses encoder).
     """
@@ -177,7 +265,11 @@ def update_eq_x_gesture(stick_x, now):
                 st.state["eq_armed_band"]     = selected_band
                 st.state["eq_armed_until"]    = now + timeout_s
             band_name = EQ_MACRO_NAMES_EXPECTED[selected_band]
-            arrow = "→ boost/restore" if dir_x > 0 else "← cut/normalize"
+            # TRIM hint depends on direction AND current value
+            if _is_trim(selected_band):
+                arrow = "→ → 0 dB?" if dir_x > 0 else "← → 0 dB?"
+            else:
+                arrow = "→ boost/restore" if dir_x > 0 else "← cut/normalize"
             with st._lock:
                 st.state["last_action"] = f"◇ {band_name} {arrow} armed"
             return True
@@ -220,23 +312,18 @@ def update_eq_x_gesture(stick_x, now):
 
     return False
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Y GESTURE — BAND NAVIGATION (double-flick)
+#  Uses EQ_MACRO_COUNT (4) for rotation modulus
 # ═══════════════════════════════════════════════════════════════════════════
 
 def update_eq_y_gesture_v911(stick_y, now):
     """
     Y axis double-flick BAND NAVIGATION.
-
-    UP (positive Y)   → next band UP    (MID→HIGH→LOW→MID loop)
-    DOWN (negative Y) → next band DOWN  (MID→LOW→HIGH→MID loop)
-
-    Reads from cfg (hot-reloadable):
-      cfg.EQ_FLICK_TIMEOUT_MS
-      cfg.EQ_FLICK_EXTREME
-      cfg.EQ_FLICK_RETURN
-
-    Returns True if gesture in progress (caller freezes X encoder).
+    4-position rotation (Low, Mid, High, TRIM).
+    UP (positive Y)   → next band UP
+    DOWN (negative Y) → next band DOWN
     """
     with st._lock:
         gesture_state = st.state["_eq_flick_y_state"]
@@ -250,7 +337,7 @@ def update_eq_y_gesture_v911(stick_y, now):
 
     if gesture_state == "idle":
         if abs_y >= cfg.EQ_FLICK_EXTREME:
-            target_band = (selected_band + dir_y) % 3
+            target_band = (selected_band + dir_y) % EQ_MACRO_COUNT
             with st._lock:
                 st.state["_eq_flick_y_state"] = "flicked"
                 st.state["_eq_flick_y_dir"]   = dir_y
@@ -297,30 +384,36 @@ def update_eq_y_gesture_v911(stick_y, now):
 
     return False
 
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  CONTINUOUS ENCODER — X axis (held)
+#  CONTINUOUS ENCODER — routes by selected band
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_drive_continuous_encoder(stick_x, now):
     """
-    Encoder-style EQ control via X axis.
-    Right = boost, Left = cut, release = HOLD.
-    Includes sticky 0 dB detent and bass safety cap.
-
-    Reads from cfg (hot-reloadable):
-      cfg.EQ_AXIS_DEAD_ZONE
-      cfg.EQ_DETENT_RANGE
-      cfg.EQ_DETENT_MIN_FACTOR
-      cfg.EQ_BASS_BOOST_CAP
-      cfg.EQ_WRITE_THROTTLE
-      cfg.EQ_WRITE_EPSILON
+    Routes to band-specific encoder. TRIM uses its own faster, separately-
+    tuned encoder function. All other bands use the shared EQ encoder.
     """
     with st._lock:
         selected_band = st.state["eq_selected_band"]
-        current_val   = st.state["eq_macro_values"][selected_band]
-        last_tick     = st.state["_eq_encoder_last_tick"]
-        last_at       = st.state["_eq_last_write_at"][selected_band]
-        last_val      = st.state["_eq_last_write_val"][selected_band]
+
+    if _is_trim(selected_band):
+        _eq_drive_trim_encoder(stick_x, now)
+    else:
+        _eq_drive_band_encoder(stick_x, now, selected_band)
+
+
+def _eq_drive_band_encoder(stick_x, now, band):
+    """
+    Encoder for EQ bands (Low/Mid/High). Uses cfg.EQ_* values.
+    Sticky 0 dB detent at EQ_NEUTRAL_MACRO (107.9).
+    Bass safety cap on the Low band.
+    """
+    with st._lock:
+        current_val = st.state["eq_macro_values"][band]
+        last_tick   = st.state["_eq_encoder_last_tick"]
+        last_at     = st.state["_eq_last_write_at"][band]
+        last_val    = st.state["_eq_last_write_val"][band]
 
     if last_tick <= 0.0:
         dt = 0.0
@@ -341,6 +434,7 @@ def eq_drive_continuous_encoder(stick_x, now):
     if delta == 0.0:
         return
 
+    # Sticky 0 dB detent — uses EQ's neutral (107.9)
     distance_from_neutral = abs(current_val - EQ_NEUTRAL_MACRO)
     if distance_from_neutral < cfg.EQ_DETENT_RANGE:
         detent_factor = distance_from_neutral / cfg.EQ_DETENT_RANGE
@@ -348,18 +442,86 @@ def eq_drive_continuous_encoder(stick_x, now):
 
     new_val = current_val + delta
 
-    is_bass = (selected_band == EQ_SLOT_LOW)
+    # Bass safety cap
+    is_bass = (band == EQ_SLOT_LOW)
     upper_cap = cfg.EQ_BASS_BOOST_CAP if is_bass else EQ_MACRO_MAX
     new_val = clamp(new_val, EQ_MACRO_MIN, upper_cap)
 
+    # Throttle + epsilon
     if (now - last_at) < cfg.EQ_WRITE_THROTTLE:
         return
     if abs(new_val - last_val) < cfg.EQ_WRITE_EPSILON:
         return
 
     with st._lock:
-        st.state["eq_macro_values"][selected_band]    = new_val
-        st.state["_eq_last_write_at"][selected_band]  = now
-        st.state["_eq_last_write_val"][selected_band] = new_val
+        st.state["eq_macro_values"][band]    = new_val
+        st.state["_eq_last_write_at"][band]  = now
+        st.state["_eq_last_write_val"][band] = new_val
 
-    osc_set_eq_macro(selected_band, new_val)
+    osc_set_eq_macro(band, new_val)
+
+
+def _eq_drive_trim_encoder(stick_x, now):
+    """
+    TRIM-specific encoder. Uses cfg.TRIM_* values.
+    Hard cap at TRIM_MAX_DB (+9 dB default).
+    Sticky 0 dB detent at TRIM_NEUTRAL_MACRO (64.0).
+    """
+    band = EQ_SLOT_TRIM
+    with st._lock:
+        current_val = st.state["eq_macro_values"][band]
+        last_tick   = st.state["_eq_encoder_last_tick"]
+        last_at     = st.state["_eq_last_write_at"][band]
+        last_val    = st.state["_eq_last_write_val"][band]
+
+    if last_tick <= 0.0:
+        dt = 0.0
+    else:
+        dt = now - last_tick
+        if dt > 0.1:
+            dt = 0.0
+
+    with st._lock:
+        st.state["_eq_encoder_last_tick"] = now
+
+    if abs(stick_x) < cfg.TRIM_DEAD_ZONE:
+        return
+    if dt <= 0.0:
+        return
+
+    # TRIM-specific delta calc
+    abs_x = abs(stick_x)
+    normalized = (abs_x - cfg.TRIM_DEAD_ZONE) / (1.0 - cfg.TRIM_DEAD_ZONE)
+    normalized = clamp(normalized, 0.0, 1.0)
+    shaped = normalized ** cfg.TRIM_CURVE_EXP
+    macro_range = EQ_MACRO_MAX - EQ_MACRO_MIN
+    velocity = (macro_range / cfg.TRIM_SWEEP_SECONDS) * shaped
+    sign = 1.0 if stick_x > 0 else -1.0
+    delta = velocity * sign * dt
+
+    if delta == 0.0:
+        return
+
+    # Sticky 0 dB detent — TRIM uses its OWN neutral position (64.0)
+    distance_from_neutral = abs(current_val - TRIM_NEUTRAL_MACRO)
+    if distance_from_neutral < cfg.TRIM_DETENT_RANGE:
+        detent_factor = distance_from_neutral / cfg.TRIM_DETENT_RANGE
+        delta *= max(cfg.TRIM_DETENT_MIN_FACTOR, detent_factor)
+
+    new_val = current_val + delta
+
+    # TRIM hard cap at +9 dB
+    new_val = clamp(new_val, EQ_MACRO_MIN, _trim_max_macro())
+
+    # Throttle + epsilon
+    if (now - last_at) < cfg.TRIM_WRITE_THROTTLE:
+        return
+    if abs(new_val - last_val) < cfg.TRIM_WRITE_EPSILON:
+        return
+
+    with st._lock:
+        st.state["eq_macro_values"][band]    = new_val
+        st.state["_eq_last_write_at"][band]  = now
+        st.state["_eq_last_write_val"][band] = new_val
+
+    osc_set_eq_macro(band, new_val)
