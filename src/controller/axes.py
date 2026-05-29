@@ -195,32 +195,39 @@ def handle_axes_eq(controller, dt):
         eq_y_input = -ry_curved
         eq_x_input =  rx_curved
 
-    # 1. Process Y double-flick (band navigation)
-    y_in_gesture = update_eq_y_gesture_v911(eq_y_input, now)
-
-    # 2. AXIS-DOMINANCE SUPPRESSION
     abs_x = abs(eq_x_input)
     abs_y = abs(eq_y_input)
+
+    # ── STEP 1: Y gesture (band navigation) — runs first ──────────────
+    y_in_gesture = update_eq_y_gesture_v911(eq_y_input, now)
+
+    # ── STEP 2: Y dominance suppression ────────────────────────────────
     y_dominates = (abs_y > EQ_AXIS_DEAD_ZONE and
                    abs_y > abs_x * EQ_DOMINANCE_RATIO)
 
     if y_in_gesture or y_dominates:
+        # Y owns the stick — freeze X completely
         with st._lock:
             st.state["_eq_encoder_last_tick"] = now
-            if y_in_gesture:
-                st.state["_eq_flick_x_state"] = "idle"
-                st.state["_eq_flick_x_dir"]   = 0
+            st.state["_eq_flick_x_state"]     = "idle"
+            st.state["_eq_flick_x_dir"]       = 0
         return
 
-    # 3. Process X double-flick (value actions)
+    # ── STEP 3: X gesture (kill / restore) ─────────────────────────────
     x_in_gesture = update_eq_x_gesture(eq_x_input, now)
 
-    # 4. Continuous encoder (only if no X gesture)
-    if not x_in_gesture:
-        eq_drive_continuous_encoder(eq_x_input, now)
-    else:
+    if x_in_gesture:
+        # X owns the stick — freeze Y completely
+        # Prevents band switch from firing mid-gesture
         with st._lock:
             st.state["_eq_encoder_last_tick"] = now
+            st.state["_eq_flick_y_state"]     = "idle"
+            st.state["_eq_flick_y_dir"]       = 0
+        # Do NOT run encoder during a gesture
+        return
+
+    # ── STEP 4: Continuous encoder (only when no gesture owns the stick) ─
+    eq_drive_continuous_encoder(eq_x_input, now)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  SELECT+R-STICK VOLUME CONTROL
