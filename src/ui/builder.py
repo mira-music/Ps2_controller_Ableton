@@ -2,12 +2,46 @@
 ================================================================================
   src/ui/builder.py — Build the Tkinter UI
 ================================================================================
-  Constructs the v9.10+ two-column layout:
-    LEFT  — EQ stack (HIGH/MID/LOW vertical) + big DJM channel meter
-    RIGHT — Session navigation info (bookmarks, group, track, scene,
-            clip, number grid, volume, stop button, modifier pills,
-            EQ status line)
-    FX panel below (full width) — 8 macro knobs in 2 rows of 4
+  Constructs the layout. Build B revision:
+
+    Top area, two columns:
+      ┌─────────────────────────────────────────────────────────────┐
+      │  TRANSPORT BAR (full width: ■ STOPPED / ▶ PLAYING + BPM)    │
+      ├──────────────────────────────────┬──────────────────────────┤
+      │  LEFT: EQ + METER SECTION        │  RIGHT: NAV INFO         │
+      │                                  │                          │
+      │  ┌──────────┬──────────────┐    │  BMARK row               │
+      │  │ METER    │  KNOBS       │    │  GROUP row               │
+      │  │ COLUMN   │  COLUMN      │    │  TRACK block             │
+      │  │          │              │    │  SCENE block             │
+      │  │ CLIP bar │  TRIM ●      │    │  CLIP block              │
+      │  │          │              │    │  Number grid             │
+      │  │  +12 ▓   │  HIGH ●      │    │  Volume                  │
+      │  │   +9 ▓   │              │    │  Stop button             │
+      │  │   +6 ▓   │  MID  ●      │    │  Modifier pills          │
+      │  │   ...    │              │    │  EQ status               │
+      │  │  -30 ▓   │  LOW  ●      │    │                          │
+      │  │          │              │    │                          │
+      │  └──────────┴──────────────┘    │                          │
+      │                                  │                          │
+      ├──────────────────────────────────┴──────────────────────────┤
+      │  NOTIFICATION SLOT                                           │
+      ├──────────────────────────────────────────────────────────────┤
+      │  FX MACHINE PANEL (full width)                               │
+      ├──────────────────────────────────────────────────────────────┤
+      │  CONTROLLER STATUS + REFRESH                                 │
+      │  ACTION LINE                                                 │
+      │  FOOTER                                                      │
+      └──────────────────────────────────────────────────────────────┘
+
+  Build B revisions to the EQ section:
+    - METER moved to LEFT of knobs (was: knobs on left, meter on right)
+      Matches the DJM-900 NXS2 physical layout where the channel meter
+      sits on the left side of each channel strip.
+    - The CLIP indicator inside the meter now spans the meter column
+      width (handled in widgets.draw_djm_meter, not here).
+    - TRIM knob now appears at the TOP of the knob column, then HIGH /
+      MID / LOW below. This matches the DJM-900 NXS2 reference image.
 
   Returns a dict of widget references that update_ui() drives.
 ================================================================================
@@ -30,12 +64,15 @@ from src.ui.palette import (
     F_VALUE, F_VALUE_BIG, F_TITLE, F_TRACK_NAME, F_MONO, F_EQ_BAND,
 )
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def hline(parent, colour=ABL_DIVIDER, pady=4):
+    """Thin horizontal divider line."""
     tk.Frame(parent, bg=colour, height=1).pack(fill="x", padx=10, pady=pady)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MAIN UI BUILDER
@@ -48,7 +85,7 @@ def build_ui(root):
     root.minsize(700, 850)
     root.attributes("-topmost", True)
 
-    # ── HEADER ──
+    # ─── HEADER BAR ─────────────────────────────────────────────────────
     hdr = tk.Frame(root, bg=ABL_PANEL_DARK)
     hdr.pack(fill="x")
     inner = tk.Frame(hdr, bg=ABL_PANEL_DARK)
@@ -61,7 +98,7 @@ def build_ui(root):
              font=F_LABEL_TINY, anchor="e").pack(side="right")
     tk.Frame(root, bg=ABL_BLUE, height=2).pack(fill="x")
 
-    # ── TRANSPORT ──
+    # ─── TRANSPORT BAR ──────────────────────────────────────────────────
     trow = tk.Frame(root, bg=ABL_BG)
     trow.pack(fill="x", padx=10, pady=(6, 0))
     lbl_playing = tk.Label(trow, text="■ STOPPED", bg=ABL_BG, fg=ABL_RED,
@@ -73,16 +110,17 @@ def build_ui(root):
 
     hline(root, pady=5)
 
-    # ══════════════════════════════════════════════════════════
-    #  TOP 2-COLUMN AREA: EQ + METER (left) | NAV INFO (right)
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    #  TOP TWO-COLUMN AREA: EQ + METER (left) | NAV INFO (right)
+    # ══════════════════════════════════════════════════════════════════
     top_area = tk.Frame(root, bg=ABL_BG)
     top_area.pack(fill="x", padx=8)
 
-    # ─────── LEFT COLUMN: EQ STACK + DJM CHANNEL METER ───────
+    # ─────── LEFT COLUMN: EQ SECTION (METER + KNOBS) ─────────────────
     eq_section = tk.Frame(top_area, bg=ABL_BG)
     eq_section.pack(side="left", fill="y", padx=(0, 8))
 
+    # Section title row (above the framed container)
     eq_title_row = tk.Frame(eq_section, bg=ABL_BG)
     eq_title_row.pack(fill="x", pady=(0, 2))
     lbl_eq_title = tk.Label(eq_title_row, text="◇ EQ",
@@ -94,20 +132,47 @@ def build_ui(root):
                             font=F_LABEL_TINY, anchor="e")
     lbl_eq_track.pack(side="right")
 
-    # Framed container (border around EQ + meter)
+    # Framed container around the meter + knobs (gives a visual border)
     eq_glow = tk.Frame(eq_section, bg=EQ_KNOB_RING_DARK, padx=2, pady=2)
     eq_glow.pack(fill="y")
     eq_body = tk.Frame(eq_glow, bg=ABL_PANEL_DARK)
     eq_body.pack(fill="y")
 
-    # Knobs sub-column (HIGH / MID / LOW vertical)
+    # ── Inside eq_body, two sub-columns:
+    # ── LEFT sub-column  = DJM channel meter (new position, was on right)
+    # ── RIGHT sub-column = TRIM / HIGH / MID / LOW knobs vertical stack
+    #
+    # Layout matches DJM-900 NXS2 hardware: meter sits to the LEFT of
+    # the channel strip's EQ knobs.
+
+    # Constants used to size both sub-columns
+    EQ_KNOB_SIZE = 72
+    # Meter height needs to span 4 knob cells (TRIM + HIGH + MID + LOW),
+    # each cell is approximately (KNOB_SIZE + label + value + padding).
+    # The +38 accounts for: name label (~14px) + value label (~14px) +
+    # cell pady (5*2=10px). The *4 covers all four cells. +10 is breathing room.
+    meter_h = (EQ_KNOB_SIZE + 38) * 4 + 10
+
+    # ──────── METER COLUMN (LEFT) ──────────
+    meter_col = tk.Frame(eq_body, bg=ABL_PANEL_DARK, padx=4, pady=2)
+    meter_col.pack(side="left", fill="y")
+
+    tk.Label(meter_col, text="OUT", bg=ABL_PANEL_DARK,
+             fg=ABL_TEXT_DIM, font=F_LABEL_TINY).pack(pady=(2, 4))
+
+    # Width increased from 42 → 58 to accommodate the WIDE CLIP bar
+    # (CLIP now spans the full meter column width, see widgets.draw_djm_meter).
+    eq_channel_meter = tk.Canvas(meter_col, width=58, height=meter_h,
+                                  bg=ABL_PANEL_DARK, highlightthickness=0)
+    eq_channel_meter.pack(pady=(0, 2))
+
+    # ──────── KNOBS COLUMN (RIGHT) ──────────
     knobs_col = tk.Frame(eq_body, bg=ABL_PANEL_DARK)
     knobs_col.pack(side="left", fill="y", padx=2, pady=2)
 
-    EQ_KNOB_SIZE = 72
     eq_cells = [None] * EQ_MACRO_COUNT
 
-    # Display order: TRIM on top, then HIGH, MID, LOW (DJM-900 layout)
+    # Display order top-to-bottom: TRIM, HIGH, MID, LOW (DJM-900 NXS2 layout)
     display_order = [EQ_SLOT_TRIM, EQ_SLOT_HIGH, EQ_SLOT_MID, EQ_SLOT_LOW]
     display_labels = {
         EQ_SLOT_LOW:  "LOW",
@@ -135,23 +200,11 @@ def build_ui(root):
 
         eq_cells[band_idx] = (cell, canvas, name_lbl, value_lbl)
 
-    # DJM CHANNEL METER sub-column (big single meter)
-    meter_col = tk.Frame(eq_body, bg=ABL_PANEL_DARK, padx=4, pady=2)
-    meter_col.pack(side="left", fill="y")
-
-    tk.Label(meter_col, text="OUT", bg=ABL_PANEL_DARK,
-             fg=ABL_TEXT_DIM, font=F_LABEL_TINY).pack(pady=(2, 4))
-
-    meter_h = (EQ_KNOB_SIZE + 38) * 4 + 10
-    eq_channel_meter = tk.Canvas(meter_col, width=42, height=meter_h,
-                                  bg=ABL_PANEL_DARK, highlightthickness=0)
-    eq_channel_meter.pack(pady=(0, 2))
-
-    # ─────── RIGHT COLUMN: NAV INFO ───────
+    # ─────── RIGHT COLUMN: NAV INFO ──────────────────────────────────
     nav_section = tk.Frame(top_area, bg=ABL_BG)
     nav_section.pack(side="left", fill="both", expand=True)
 
-    # Bookmark row
+    # ── Bookmark row ──
     brow = tk.Frame(nav_section, bg=ABL_CELL, padx=8, pady=4)
     brow.pack(fill="x")
     tk.Label(brow, text="BMARK", bg=ABL_CELL, fg=ABL_TEXT_DIM,
@@ -163,7 +216,7 @@ def build_ui(root):
                           font=F_BODY)
     lbl_bm_pos.pack(side="right")
 
-    # Group row
+    # ── Group row ──
     grow2 = tk.Frame(nav_section, bg=ABL_CELL_ALT, padx=8, pady=4)
     grow2.pack(fill="x", pady=(2, 0))
     tk.Label(grow2, text="GROUP", bg=ABL_CELL_ALT, fg=ABL_TEXT_DIM,
@@ -175,7 +228,7 @@ def build_ui(root):
                              fg=ABL_TEXT_DIM, font=F_BODY)
     lbl_group_pos.pack(side="right")
 
-    # Track block
+    # ── Track block ──
     track_block = tk.Frame(nav_section, bg=ABL_PANEL, padx=10, pady=4)
     track_block.pack(fill="x", pady=(4, 0))
     tk.Label(track_block, text="TRACK", bg=ABL_PANEL, fg=ABL_TEXT_DIM,
@@ -185,7 +238,7 @@ def build_ui(root):
                               font=F_TRACK_NAME, anchor="w")
     lbl_track_name.pack(fill="x")
 
-    # Scene
+    # ── Scene block ──
     scene_block = tk.Frame(nav_section, bg=ABL_BG, padx=10)
     scene_block.pack(fill="x", pady=(2, 0))
     tk.Label(scene_block, text="SCENE", bg=ABL_BG, fg=ABL_TEXT_DIM,
@@ -194,7 +247,7 @@ def build_ui(root):
                               font=F_TITLE, anchor="w")
     lbl_scene_name.pack(fill="x")
 
-    # Clip
+    # ── Clip block ──
     clip_block = tk.Frame(nav_section, bg=ABL_BG, padx=10)
     clip_block.pack(fill="x", pady=(2, 0))
     tk.Label(clip_block, text="CLIP", bg=ABL_BG, fg=ABL_TEXT_DIM,
@@ -203,7 +256,7 @@ def build_ui(root):
                              font=F_BODY_BOLD, anchor="w")
     lbl_clip_name.pack(fill="x")
 
-    # Number grid
+    # ── Number grid (Scene / Track / Bmark position indices) ──
     grid = tk.Frame(nav_section, bg=ABL_BG)
     grid.pack(fill="x", pady=(4, 0))
 
@@ -221,7 +274,7 @@ def build_ui(root):
     lbl_track_num = pos_col(grid, "TRACK", 1)
     lbl_bm_num    = pos_col(grid, "BMARK", 2, ABL_YELLOW)
 
-    # Volume row
+    # ── Volume row ──
     vrow = tk.Frame(nav_section, bg=ABL_BG)
     vrow.pack(fill="x", padx=2, pady=(6, 0))
     lbl_volume = tk.Label(vrow, text="+0.0 dB", bg=ABL_BG, fg=ABL_TEXT,
@@ -231,7 +284,7 @@ def build_ui(root):
                             fg=ABL_TEXT_FAINT, font=F_LABEL_TINY, anchor="e")
     lbl_vol_mode.pack(side="right")
 
-    # Stop button
+    # ── Stop track button ──
     btn_stop = tk.Button(nav_section, text="■ STOP TRACK (L2)",
                          bg=ABL_PANEL, fg=ABL_RED, font=F_BODY_BOLD,
                          activebackground="#3a0000", activeforeground=ABL_RED,
@@ -239,7 +292,7 @@ def build_ui(root):
                          command=action_stop_track)
     btn_stop.pack(fill="x", pady=(4, 4))
 
-    # Modifier pills
+    # ── Modifier pills row ──
     mrow = tk.Frame(nav_section, bg=ABL_BG)
     mrow.pack(fill="x", pady=(0, 2))
 
@@ -249,27 +302,27 @@ def build_ui(root):
         lbl.pack(side="left", padx=(0, 2))
         return lbl
 
-    lbl_r2     = pill(mrow, "R2 SAFE")
-    lbl_select = pill(mrow, "SEL")
-    lbl_start  = pill(mrow, "PLAY")
-    lbl_l1     = pill(mrow, "L1 FX")
+    lbl_r2      = pill(mrow, "R2 SAFE")
+    lbl_select  = pill(mrow, "SEL")
+    lbl_start   = pill(mrow, "PLAY")
+    lbl_l1      = pill(mrow, "L1 FX")
     lbl_eq_pill = pill(mrow, "◇ EQ")
 
-    # EQ status line
+    # ── EQ status line ──
     lbl_eq_status = tk.Label(nav_section, text="EQ inactive (R3 to toggle)",
                              bg=ABL_BG, fg=ABL_TEXT_FAINT,
                              font=F_LABEL_TINY, anchor="w")
     lbl_eq_status.pack(fill="x", pady=(2, 0))
 
     hline(root, pady=6)
-    
-    #
-    # ══════════════════════════════════════════════════════════
-    #  NOTIFICATION SLOT (Build B Phase 3)
-    #  Dedicated area for transient warnings (config errors,
-    #  clipping alerts, restart-required notices). Separate from
-    #  the action line at the bottom.
-    # ══════════════════════════════════════════════════════════
+
+    # ══════════════════════════════════════════════════════════════════
+    #  NOTIFICATION SLOT
+    #  Dedicated area for transient warnings (config errors, clipping
+    #  alerts, restart-required notices). Separate from the action line
+    #  at the bottom so important warnings aren't overwritten by
+    #  routine activity messages.
+    # ══════════════════════════════════════════════════════════════════
     notif_frame = tk.Frame(root, bg=ABL_BG)
     notif_frame.pack(fill="x", padx=8, pady=(0, 2))
     lbl_notification = tk.Label(
@@ -282,9 +335,9 @@ def build_ui(root):
     )
     lbl_notification.pack(fill="x")
 
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
     #  FX MACHINE PANEL (full width)
-    # ══════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
     fx_section = tk.Frame(root, bg=ABL_BG)
     fx_section.pack(fill="x", padx=8, pady=(0, 2))
 
@@ -342,6 +395,7 @@ def build_ui(root):
 
         return cell, canvas, name_lbl, value_lbl
 
+    # Two rows of 4 FX knobs each
     for col in range(4):
         fx_cells.append(make_knob_cell(fx_inner, 0, col, ABL_ORANGE))
     for col in range(4):
@@ -349,7 +403,7 @@ def build_ui(root):
 
     hline(root, pady=4)
 
-    # Bottom row
+    # ── Controller status + refresh button ──
     bot_row = tk.Frame(root, bg=ABL_BG)
     bot_row.pack(fill="x", padx=8, pady=(0, 2))
 
@@ -365,11 +419,14 @@ def build_ui(root):
               command=action_force_refresh).pack(side="right")
 
     hline(root, pady=3)
+
+    # ── Action line ──
     lbl_action = tk.Label(root, text="System ready",
                           bg=ABL_BG, fg=ABL_TEXT_DIM,
                           font=F_BODY, anchor="w")
     lbl_action.pack(fill="x", padx=10, pady=(0, 2))
 
+    # ── Footer ──
     footer = tk.Label(root,
                       text="MIRA___OFC  ·  Modulated_OFC  ·  © Ayoub Agoujdad",
                       bg=ABL_BG, fg=ABL_TEXT_FAINT,

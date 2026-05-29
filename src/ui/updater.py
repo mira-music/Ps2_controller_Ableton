@@ -2,6 +2,25 @@
 ================================================================================
   src/ui/updater.py — Tkinter UI Update Loop (40 Hz)
 ================================================================================
+  update_ui() is scheduled via root.after() at cfg.UI_REFRESH_MS intervals.
+  Reads state snapshot under one lock acquisition, processes meter math
+  outside the lock, then updates widgets via dirty-cache set_label() and
+  canvas redraws.
+
+  All UI updates run on the main thread (Tkinter requirement).
+
+  Build B revisions in this file:
+    - TRIM visual position now sourced from widgets.compute_trim_visual_position
+      (was: local _trim_visual_position helper that used wrong mapping).
+      The new helper uses cfg.TRIM_MAX_DB as the visual full-right endpoint,
+      so the TRIM knob indicator reaches 5 o'clock at the +9 dB cap.
+    - Removed the duplicate EQ knob loop body that was overwriting the
+      TRIM-aware first pass with EQ-only code.
+    - Meter state reads consolidated into the initial snapshot block.
+    - Meter state writes batched into a single lock acquisition.
+    - CLIP notifications pushed only on severity transition, not every frame.
+    - dt_meter computed from cfg.UI_REFRESH_MS instead of hardcoded 1/40.
+================================================================================
 """
 
 import time
@@ -33,43 +52,43 @@ from src.ui.palette import (
     EQ_LABEL_COLOR, EQ_LABEL_SELECTED, EQ_LABEL_ARMED,
 )
 from src.ui.widgets import (
-    set_label, draw_knob, draw_eq_knob, draw_trim_knob,
-    draw_djm_meter,
+    set_label,
+    draw_knob, draw_eq_knob, draw_trim_knob,
+    draw_djm_meter, draw_channel_meter,
     raw_meter_to_display_db, apply_meter_ballistics,
-    update_meter_peak_db, compute_clip_state, should_clip_flicker,
-    update_meter_peak, draw_channel_meter,
+    update_meter_peak_db, update_meter_peak,
+    compute_clip_state, should_clip_flicker,
+    compute_trim_visual_position,
 )
 from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
-# Module-level state for clip notification deduplication.
-# Tracks the last pushed severity so we only push on transitions,
-# not on every frame while clipping is active (which was 40 calls/sec).
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MODULE-LEVEL STATE
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Tracks the last pushed clip notification severity so we only push on
+# state transitions (not every frame while clipping is active, which used
+# to flood push_notification at ~40 Hz).
 _last_clip_severity_pushed = None
 
 
-def _trim_visual_position(macro_value):
-    """
-    Convert TRIM macro value to visual knob position (0.0-1.0).
-    Uses TRIM_NEUTRAL_MACRO (64.0), not EQ_NEUTRAL_MACRO (107.9).
-    """
-    if macro_value <= TRIM_NEUTRAL_MACRO:
-        if TRIM_NEUTRAL_MACRO <= 0:
-            return 0.0
-        return (macro_value / TRIM_NEUTRAL_MACRO) * 0.5
-    else:
-        boost_range = 127.0 - TRIM_NEUTRAL_MACRO
-        if boost_range <= 0:
-            return 0.5
-        return 0.5 + ((macro_value - TRIM_NEUTRAL_MACRO) / boost_range) * 0.5
-
+# ═══════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
 
 def _blink_on():
-    ms_now = int(time.perf_counter() * 1000)
+    """Returns True/False alternating at cfg.BLINK_PERIOD_MS for visual blinking."""
     from src.config import BLINK_PERIOD_MS
+    ms_now = int(time.perf_counter() * 1000)
     return (ms_now // BLINK_PERIOD_MS) % 2 == 0
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  MAIN UI UPDATE LOOP
+# ═══════════════════════════════════════════════════════════════════════════
 
 def update_ui(root, lbl):
     global _last_clip_severity_pushed
@@ -78,9 +97,8 @@ def update_ui(root, lbl):
     now = time.perf_counter()
 
     # ── SINGLE LARGE STATE SNAPSHOT ─────────────────────────────────────
-    # All state reads happen here under one lock acquisition.
-    # Meter values are included so the meter processing below needs
-    # zero additional lock acquisitions for reads.
+    # All state reads happen here under one lock acquisition. Meter values
+    # are included so meter processing below needs zero additional reads.
     with st._lock:
         s          = {k: v for k, v in st.state.items()
                       if not isinstance(v, (dict, list))}
@@ -133,23 +151,24 @@ def update_ui(root, lbl):
         meter_left       = st.state["eq_meter_left"]
         meter_right      = st.state["eq_meter_right"]
 
-        # Meter processing inputs — snapshotted here, used below
+        # Meter processing inputs
         prev_smoothed    = st.state["meter_smoothed_db"]
         prev_peak_db     = st.state["meter_peak_db"]
         prev_peak_time   = st.state["meter_peak_time"]
         was_clip_active  = st.state["clip_active"]
         clip_last_time   = st.state["clip_last_active_time"]
 
-        # Legacy meter (old draw_channel_meter, active until Phase 4)
+        # Legacy meter peak (kept until old draw_channel_meter path is removed)
         old_peak_val     = st.state["eq_meter_peak"]
         old_peak_time    = st.state["eq_meter_peak_time"]
 
+        # Notification slot
         notif_text       = st.state["notification_text"]
         notif_severity   = st.state["notification_severity"]
         notif_time       = st.state["notification_time"]
         notif_duration   = st.state["notification_duration"]
 
-    # ── SHORT-LIVED STATE EXPIRY (no lock needed — using local snapshots) ──
+    # ── SHORT-LIVED STATE EXPIRY ────────────────────────────────────────
     if active_slot >= 0 and now > active_until:
         with st._lock:
             st.state["_fx_active_slot"] = -1
@@ -160,19 +179,20 @@ def update_ui(root, lbl):
             st.state["eq_armed_band"] = -1
         eq_armed_band = -1
 
-    # ── TRANSPORT + BPM ──────────────────────────────────────────────────
+    # ── TRANSPORT + BPM ─────────────────────────────────────────────────
     if abl["is_playing"]:
         set_label(lbl["playing"], "playing", "▶ PLAYING", fg=ABL_GREEN)
     else:
         set_label(lbl["playing"], "playing", "■ STOPPED", fg=ABL_RED)
     set_label(lbl["bpm"], "bpm", f"{abl['bpm']:.1f} BPM")
 
-    # ── BOOKMARK + GROUP ROWS ────────────────────────────────────────────
+    # ── BOOKMARK + GROUP ROWS ───────────────────────────────────────────
     if bmarks:
         cur = cursor_bmark
         bm  = bmarks[cur]
         scene_idx = bm["scene_index"]
-        scene_color_int = all_scene_colors[scene_idx] if scene_idx < len(all_scene_colors) else 0
+        scene_color_int = (all_scene_colors[scene_idx]
+                           if scene_idx < len(all_scene_colors) else 0)
         bm_color = int_to_hex_color(scene_color_int, ABL_YELLOW)
         fg = ABL_RED if s["flash_bmark"] else bm_color
         set_label(lbl["bookmark"], "bookmark", bm["name"], fg=fg)
@@ -197,7 +217,7 @@ def update_ui(root, lbl):
         set_label(lbl["group"],     "group",     "no *-tracks", fg=ABL_TEXT_FAINT)
         set_label(lbl["group_pos"], "group_pos", "")
 
-    # ── TRACK / SCENE / CLIP ─────────────────────────────────────────────
+    # ── TRACK / SCENE / CLIP ────────────────────────────────────────────
     track_color_int = (all_track_colors[current_track]
                        if current_track < len(all_track_colors) else 0)
     track_color = int_to_hex_color(track_color_int, ABL_TEXT)
@@ -224,7 +244,7 @@ def update_ui(root, lbl):
               str(s["track"] + 1),
               fg=ABL_RED if s["flash_track"] else ABL_TEXT)
 
-    # ── VOLUME ───────────────────────────────────────────────────────────
+    # ── VOLUME ──────────────────────────────────────────────────────────
     vol = abl["track_volume"]
     vol_ratio = vol / ABLETON_UNITY
     if vol == 0.0:
@@ -242,7 +262,7 @@ def update_ui(root, lbl):
     else:
         set_label(lbl["vol_mode"], "vol_mode", "SELECT+R-stick", fg=ABL_TEXT_FAINT)
 
-    # ── MODIFIER PILLS ───────────────────────────────────────────────────
+    # ── MODIFIER PILLS ──────────────────────────────────────────────────
     lbl["r2"].config(fg=ABL_RED if s["r2_held"] else ABL_TEXT_FAINT,
                      bg="#3a1818" if s["r2_held"] else ABL_PANEL)
     lbl["select"].config(fg=ABL_BLUE if s["select_held"] else ABL_TEXT_FAINT,
@@ -256,7 +276,7 @@ def update_ui(root, lbl):
 
     set_label(lbl["action"], "action", s["last_action"])
 
-    # ── CONTROLLER STATUS ────────────────────────────────────────────────
+    # ── CONTROLLER STATUS ───────────────────────────────────────────────
     if ctrl_conn:
         lbl["ctrl"].config(text=f"● {ctrl_name[:16]}",
                            bg="#1a2a1a", fg=ABL_GREEN)
@@ -266,7 +286,7 @@ def update_ui(root, lbl):
                            bg=BLINK_BG_BRIGHT if bright else BLINK_BG_DIM,
                            fg="#ffffff" if bright else ABL_TEXT)
 
-    # ── EQ STATUS LINE ───────────────────────────────────────────────────
+    # ── EQ STATUS LINE ──────────────────────────────────────────────────
     eq_track_color_hex = int_to_hex_color(eq_track_color, ABL_TEXT)
     if eq_idx < 0:
         set_label(lbl["eq_title"], "eq_title", "◇ EQ", fg=ABL_TEXT_FAINT)
@@ -297,19 +317,22 @@ def update_ui(root, lbl):
                   "EQ inactive (R3 to toggle)", fg=ABL_TEXT_FAINT)
         lbl["eq_glow"].config(bg=EQ_KNOB_RING_DARK)
 
-    # ── EQ KNOBS (Build B: TRIM + HIGH + MID + LOW = 4 knobs) ───────────
-    # Single pass only. The TRIM knob uses draw_trim_knob and
-    # _trim_visual_position; EQ bands use draw_eq_knob and eq_visual_position.
+    # ── EQ KNOBS (Build B: TRIM + HIGH + MID + LOW = 4 knobs) ──────────
+    # Single pass. TRIM uses draw_trim_knob with compute_trim_visual_position;
+    # EQ bands use draw_eq_knob with eq_visual_position.
     for band_idx in range(EQ_MACRO_COUNT):
         if lbl["eq_cells"][band_idx] is None:
             continue
+
         cell, canvas, name_lbl, value_lbl = lbl["eq_cells"][band_idx]
-        macro_val = eq_macro_values[band_idx] if band_idx < len(eq_macro_values) else 0.0
-        value_str = eq_value_strings[band_idx] if band_idx < len(eq_value_strings) else "—"
+        macro_val = (eq_macro_values[band_idx]
+                     if band_idx < len(eq_macro_values) else 0.0)
+        value_str = (eq_value_strings[band_idx]
+                     if band_idx < len(eq_value_strings) else "—")
 
         is_trim = (band_idx == EQ_SLOT_TRIM)
         if is_trim:
-            visual_pos = _trim_visual_position(macro_val)
+            visual_pos = compute_trim_visual_position(macro_val)
         else:
             visual_pos = eq_visual_position(macro_val)
 
@@ -347,9 +370,7 @@ def update_ui(root, lbl):
         set_label(value_lbl, f"eq_value_{band_idx}",
                   value_str if value_str else "—", fg=label_color)
 
-    # ── DJM CHANNEL METER (Build B Phase 2 math + CLIP) ─────────────────
-    # All meter state reads were done in the initial snapshot above.
-    # dt_meter reads cfg.UI_REFRESH_MS so it respects post-restart changes.
+    # ── DJM CHANNEL METER (Build B Phase 2 math + CLIP detection) ──────
     dt_meter = cfg.UI_REFRESH_MS / 1000.0
 
     current_level = max(meter_left, meter_right)
@@ -364,7 +385,7 @@ def update_ui(root, lbl):
         smoothed_db, was_clip_active, clip_last_time, now
     )
 
-    # Legacy meter peak (old draw_channel_meter path, active until Phase 4)
+    # Legacy meter peak (kept for old draw_channel_meter path)
     old_peak = max(meter_left, meter_right)
     new_old_peak, new_old_peak_time = update_meter_peak(
         old_peak, old_peak_val, old_peak_time, now
@@ -382,9 +403,7 @@ def update_ui(root, lbl):
         st.state["eq_meter_peak"]         = new_old_peak
         st.state["eq_meter_peak_time"]    = new_old_peak_time
 
-    # ── CLIP NOTIFICATIONS (push only on severity transitions) ───────────
-    # Previously pushed every frame while clipping (~40 calls/sec to
-    # push_notification and st._lock). Now only pushes when severity changes.
+    # ── CLIP NOTIFICATIONS (push only on severity transitions) ─────────
     if clip_active and clip_level >= 0.7:
         new_severity = "critical"
         msg = "🔴 SIGNAL CLIPPING — reduce gain!"
@@ -400,7 +419,7 @@ def update_ui(root, lbl):
             push_notification(msg, new_severity, 1.5)
         _last_clip_severity_pushed = new_severity
 
-    # Draw the DJM meter (Build B Phase 4 renderer)
+    # Draw the DJM meter
     clip_flicker_on = should_clip_flicker(clip_level, now)
     draw_djm_meter(
         lbl["eq_channel_meter"],
@@ -408,7 +427,7 @@ def update_ui(root, lbl):
         clip_active, clip_level, clip_flicker_on
     )
 
-    # ── NOTIFICATION SLOT ────────────────────────────────────────────────
+    # ── NOTIFICATION SLOT ───────────────────────────────────────────────
     if notif_text and notif_time > 0:
         elapsed_notif = now - notif_time
         if elapsed_notif < notif_duration:
@@ -439,7 +458,7 @@ def update_ui(root, lbl):
         if lbl["notification"].cget("text") != "":
             lbl["notification"].config(text="", bg=ABL_BG)
 
-    # ── FX PANEL TITLE ───────────────────────────────────────────────────
+    # ── FX PANEL TITLE ──────────────────────────────────────────────────
     fx_color = int_to_hex_color(fx_track_color, ABL_TEXT)
     if fx_idx < 0:
         set_label(lbl["fx_title"], "fx_title", "⚡ FX MACHINE", fg=ABL_TEXT_FAINT)
@@ -480,7 +499,7 @@ def update_ui(root, lbl):
     else:
         set_label(lbl["lock_wet"], "lock_wet", "wet: free", fg=ABL_TEXT_FAINT)
 
-    # ── FX KNOBS ─────────────────────────────────────────────────────────
+    # ── FX KNOBS ────────────────────────────────────────────────────────
     for slot in range(8):
         cell, canvas, name_lbl, value_lbl = lbl["fx_cells"][slot]
         accent  = ABL_ORANGE if slot < 4 else ABL_BLUE
@@ -544,5 +563,5 @@ def update_ui(root, lbl):
             set_label(name_lbl,  f"fx_name_{slot}", display_name, fg=ABL_TEXT_DIM)
             set_label(value_lbl, f"fx_value_{slot}", value_string, fg=accent)
 
-    from src.config import UI_REFRESH_MS
-    root.after(UI_REFRESH_MS, update_ui, root, lbl)
+    # ── RESCHEDULE ──────────────────────────────────────────────────────
+    root.after(cfg.UI_REFRESH_MS, update_ui, root, lbl)
