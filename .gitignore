@@ -43,3 +43,8 @@ dist/
 
 #My one Shoot Script
 v9_11.py
+
+# Config folder — track template, ignore user files
+config/active.toml
+config/presets/*.toml
+!config/presets/.gitkeep

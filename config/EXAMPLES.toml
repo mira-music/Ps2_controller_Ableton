@@ -1,0 +1,180 @@
+# =============================================================================
+#  FX MACHINE — Configuration Examples
+# =============================================================================
+#
+#  These are READY-TO-USE preset snippets. They're all commented out so
+#  this file does nothing on its own.
+#
+#  HOW TO USE:
+#    1. Pick a preset that matches your style below
+#    2. Copy the LINES YOU WANT into your config/active.toml
+#    3. The lines you paste OVERRIDE the corresponding lines in active.toml
+#    4. Save and reload (SELECT+START on the controller)
+#
+#  You can mix and match — copy the encoder settings from one preset and
+#  the meter settings from another.
+#
+# =============================================================================
+
+
+
+# =============================================================================
+#  PRESET 1 — PUNCHY CLUB
+# =============================================================================
+#  For high-energy live performance. Aggressive, fast, decisive.
+#  Every gesture is meant to feel sharp and instant.
+#  Best for: peak-time sets, big-room drops, fast transitions.
+#
+# [eq.encoder]
+# sweep_seconds = 0.20      # very fast sweep (full range in 0.2 seconds)
+# curve_exp = 1.0           # pure linear, instant response
+# smoothing_factor = 0.65   # snappy stick
+# dead_zone = 0.15          # tight dead zone for precision
+#
+# [eq.dominance]
+# ratio = 2.5               # easier band-switch triggers
+#
+# [eq.flick]
+# extreme = 0.85            # easier flick triggers
+# return_threshold = 0.25
+# timeout_ms = 300          # gestures must be FAST
+#
+# [eq.detent]
+# range = 0.5               # very narrow detent (zoom past 0 dB easily)
+# min_factor = 0.50         # mild detent (no obstruction)
+#
+# [trim]
+# sweep_seconds = 0.18      # gain matching at lightning speed
+#
+# [meter.clip]
+# flicker_hz = 6.0          # urgent flicker when clipping
+
+
+
+# =============================================================================
+#  PRESET 2 — STUDIO PRECISE
+# =============================================================================
+#  For careful arrangement, mixing, and detail work.
+#  Slow, surgical, fine-grained control. Forgiving with no false triggers.
+#  Best for: studio composition, mix balancing, sound design.
+#
+# [eq.encoder]
+# sweep_seconds = 0.80      # slow and deliberate
+# curve_exp = 1.5           # strong ease near rest = fine control
+# smoothing_factor = 0.35   # heavily smoothed (no jitter)
+# dead_zone = 0.20          # comfortable dead zone
+#
+# [eq.dominance]
+# ratio = 4.0               # strict separation between value and band-switch
+#
+# [eq.flick]
+# extreme = 0.92            # must commit fully
+# return_threshold = 0.20
+# timeout_ms = 500          # comfortable gesture timing
+#
+# [eq.detent]
+# range = 2.0               # wider detent (easy to find 0 dB)
+# min_factor = 0.20         # noticeable but not blocking
+#
+# [trim]
+# sweep_seconds = 0.40      # careful trim adjustments
+
+
+
+# =============================================================================
+#  PRESET 3 — BEGINNER FORGIVING
+# =============================================================================
+#  For someone learning the controller or with shaky hands.
+#  Hard to make mistakes, easy to understand. Very stable.
+#  Best for: rehearsals, learning new tracks, casual jamming.
+#
+# [eq.encoder]
+# sweep_seconds = 0.60      # comfortable speed
+# curve_exp = 1.4           # easing for fine adjustments
+# smoothing_factor = 0.40   # smooth and stable
+# dead_zone = 0.25          # wide dead zone (prevents drift)
+#
+# [eq.dominance]
+# ratio = 4.5               # very strict (no accidental band switches)
+#
+# [eq.flick]
+# extreme = 0.95            # really commit to the gesture
+# return_threshold = 0.18   # tight return (no false triggers)
+# timeout_ms = 600          # lots of time to complete the gesture
+#
+# [eq.detent]
+# range = 3.0               # wide detent (it's hard to miss 0 dB)
+# min_factor = 0.15         # very sticky at 0 dB
+#
+# [trim]
+# sweep_seconds = 0.50      # comfortable trim speed
+# max_db = 6.0              # more conservative gain ceiling
+#
+# [meter.clip]
+# warn_db = 3.0             # earlier warning (more reaction time)
+
+
+
+# =============================================================================
+#  PRESET 4 — RADIO/STREAM SAFE
+# =============================================================================
+#  For broadcasts where you can't risk clipping on air.
+#  Strict gain control, paranoid metering, conservative caps.
+#  Best for: radio shows, live streams, recorded sets.
+#
+# [eq.safety]
+# bass_boost_cap = 110.0    # cap bass at about +0.5 dB
+# mid_high_boost_pct = 0.10 # smaller boost steps
+#
+# [trim]
+# max_db = 3.0              # much tighter trim ceiling
+#
+# [meter]
+# reference_offset_db = 14.0   # show levels closer to ceiling
+# release_db_per_sec = 10.0    # slow release (catch every peak)
+# peak_hold_seconds = 3.0      # long peak hold
+#
+# [meter.clip]
+# warn_db = 0.0             # warn at unity itself
+# critical_db = 6.0         # critical well below ceiling
+# flicker_hz = 8.0          # urgent flicker
+
+
+
+# =============================================================================
+#  PRESET 5 — VINTAGE ANALOG FEEL
+# =============================================================================
+#  Simulates the slower, springier feel of a classic analog mixer.
+#  Soft on the edges, gentle ramps, mechanical detent.
+#  Best for: melodic deep house, downtempo, retro vibe sets.
+#
+# [eq.encoder]
+# sweep_seconds = 0.50
+# curve_exp = 1.6           # strong easing (very analog-feeling)
+# smoothing_factor = 0.30   # heavy smoothing
+#
+# [eq.detent]
+# range = 4.0               # wide, very obvious detent
+# min_factor = 0.10         # strong pull toward 0 dB
+#
+# [eq.ramp]
+# min_ms = 80               # longer ramps
+# max_ms = 250              # very dramatic action animations
+#
+# [meter]
+# release_db_per_sec = 8.0  # slow analog-VU style release
+# peak_hold_seconds = 2.5
+
+
+
+# =============================================================================
+#  END OF EXAMPLES
+# =============================================================================
+#
+#  Build your own presets! Once you find a combination you love, save your
+#  entire active.toml as a file in config/presets/ — that's your personal
+#  preset library.
+#
+#  If you create something cool, share it with the community.
+#
+# =============================================================================

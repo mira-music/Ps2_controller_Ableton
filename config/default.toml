@@ -1,0 +1,657 @@
+# =============================================================================
+#  FX MACHINE — Live Configuration File
+#  =============================================================================
+#
+#  This file controls how the FX Machine FEELS. You can edit it while the
+#  app is running — just save the file and press SELECT+START on your
+#  controller (or click the ⟳ REFRESH button) to reload.
+#
+#  Some values require a full app restart (they're marked with [RESTART]).
+#  Hot-reloadable values are marked with [LIVE].
+#
+#  -----------------------------------------------------------------------------
+#  HOW TO USE THIS FILE
+#  -----------------------------------------------------------------------------
+#
+#  This is a TOML file. The rules are simple:
+#    - Lines starting with # are comments (ignored, just for you to read)
+#    - Section headers look like [section.subsection]
+#    - Values look like:   parameter = number_or_text
+#    - Decimals use a period:    sweep_seconds = 0.30
+#    - Whole numbers don't need a period:    timeout_ms = 380
+#    - Don't add quotes around numbers
+#
+#  If you break the file (typo, wrong format), the app will warn you on
+#  reload and KEEP the previous working values. You won't lose your show.
+#
+#  -----------------------------------------------------------------------------
+#  PHILOSOPHY
+#  -----------------------------------------------------------------------------
+#
+#  Most "feel" values have a sweet-spot range. Going too far in either
+#  direction will make things uncomfortable to play. Each section explains
+#  what "too low" and "too high" feel like, so you can tune intuitively.
+#
+#  If you really mess things up, delete this file and restart the app —
+#  it will recreate this file with safe defaults.
+#
+# =============================================================================
+
+
+
+# =============================================================================
+#  [eq.encoder] — How the right stick FEELS when controlling the EQ value
+# =============================================================================
+#
+#  When you push the right stick LEFT or RIGHT in EQ mode, you're moving
+#  the current band's gain UP or DOWN over time. These values control
+#  how fast and how responsive that movement feels.
+#
+[eq.encoder]
+
+# [LIVE] Time (in seconds) to sweep across the FULL EQ range at maximum stick push.
+#
+# Lower values  = faster, more aggressive, "ride the wave" style
+# Higher values = slower, more precise, "studio engineer" style
+#
+# Try:  0.20 = very fast (DJ-edgy)
+#       0.30 = fast (current default — punchy, performance-friendly)
+#       0.50 = balanced
+#       1.00 = slow and surgical
+#
+# Going below 0.15 will make tiny stick movements jump too much.
+# Going above 2.00 will feel sluggish during a live drop.
+#
+sweep_seconds = 0.30
+
+# [LIVE] How the stick deflection translates to encoder speed.
+#
+# This is a mathematical curve. Think of it as "how the stick responds":
+#   1.0 = pure linear (push stick half = half speed, push full = full speed)
+#   1.2 = slight ease at the start (gentler near rest, normal at extremes)
+#   1.5 = stronger ease (very fine control near rest, fast bursts at extremes)
+#   2.0 = quadratic (almost no movement until ~50%, then explosive)
+#
+# Higher values = more "fine tuning" near rest, BUT harder to do quick stabs.
+# Lower values = instant response, BUT harder to make small adjustments.
+#
+# Most performers like 1.0 to 1.4.
+#
+curve_exp = 1.0
+
+# [LIVE] How quickly the stick reading "catches up" to your actual movement.
+#
+# This is a smoothing filter that prevents jitter and accidental twitches.
+#   0.30 = heavily smoothed (laggy but rock-solid)
+#   0.55 = balanced snappiness (current default)
+#   0.80 = very snappy (responsive but more jitter)
+#   1.00 = no smoothing at all (raw input, can feel twitchy)
+#
+# If your stick has visible drift or twitch issues, INCREASE smoothing
+# (lower this value). If it feels laggy, DECREASE smoothing (raise it).
+#
+smoothing_factor = 0.55
+
+# [LIVE] How far you have to push the stick before ANY movement registers.
+#
+# This is the "dead zone" around the resting position. Useful to prevent
+# the EQ from drifting when you THINK the stick is centered but it has
+# a tiny offset from wear or factory tolerance.
+#
+#   0.05 = very small (sensitive but can drift)
+#   0.18 = comfortable middle (current default)
+#   0.30 = large (very stable but you have to push noticeably)
+#
+# Old/worn controllers usually need 0.20 or higher.
+# Brand new controllers can use 0.10.
+#
+dead_zone = 0.18
+
+
+
+# =============================================================================
+#  [eq.dominance] — How the stick decides between BAND SWITCH vs VALUE CHANGE
+# =============================================================================
+#
+#  The right stick controls TWO things in EQ mode:
+#    X axis (left/right) = change current band's value
+#    Y axis (up/down)    = switch which band is selected
+#
+#  When you push the stick diagonally, the system has to decide which one
+#  you meant. This setting controls how "decisive" your movement has to be.
+#
+[eq.dominance]
+
+# [LIVE] How much one axis must dominate the other for it to "win".
+#
+# Example: with a ratio of 3.0, the vertical movement must be 3 times
+# bigger than the horizontal movement for it to register as a band switch.
+# Otherwise the stick is treated as a "value change" movement.
+#
+#   1.0  = very loose, accidental band switches happen often
+#   1.5  = balanced, easy to trigger gestures
+#   3.0  = strict (current default), only clear vertical movements switch bands
+#   5.0  = very strict, you have to push almost straight up/down
+#
+# If you find yourself accidentally switching bands while adjusting values,
+# RAISE this number. If band switches feel hard to trigger, LOWER it.
+#
+ratio = 3.0
+
+
+
+# =============================================================================
+#  [eq.flick] — Double-flick gesture detection
+# =============================================================================
+#
+#  In EQ mode, you can do "double-flick" gestures:
+#    X axis double-flick LEFT  = kill / normalize current band
+#    X axis double-flick RIGHT = restore / boost current band
+#    Y axis double-flick UP    = switch to band above
+#    Y axis double-flick DOWN  = switch to band below
+#
+#  A double-flick is: push the stick FULLY to one side, return to center,
+#  then push fully again in the same direction within a short window.
+#
+[eq.flick]
+
+# [LIVE] How far you must push the stick to register the start of a flick.
+#
+# 1.0 means "stick fully deflected to the extreme". You have to actually
+# slap the stick to its limit. This prevents accidental gestures.
+#
+#   0.75 = easy to trigger (might trigger by accident during normal use)
+#   0.85 = moderate
+#   0.90 = decisive (current default — must really commit to the flick)
+#   0.95 = very strict (almost impossible to do accidentally)
+#
+extreme = 0.90
+
+# [LIVE] How close to center the stick must return between the two flicks.
+#
+# After the first extreme push, you have to LET GO before the second flick.
+# This setting controls how far back the stick must come.
+#
+#   0.10 = very tight, must return almost to perfect center
+#   0.22 = balanced (current default)
+#   0.40 = loose, partial return is enough
+#
+# If your gestures aren't registering reliably, increase this number
+# (the stick doesn't have to return as far). If you're getting false
+# triggers from stick bounce, decrease it.
+#
+return_threshold = 0.22
+
+# [LIVE] How much time (in milliseconds) you have between the first flick
+# and the second flick for them to be recognized as a double-flick.
+#
+#   300 = very fast, has to be a snap
+#   380 = quick and decisive (current default)
+#   500 = comfortable
+#   700 = relaxed, lots of time
+#
+# If you're missing gestures because you can't flick fast enough,
+# INCREASE this number. If you're getting accidental gestures from
+# slow stick movements, DECREASE it.
+#
+timeout_ms = 380
+
+
+
+# =============================================================================
+#  [eq.detent] — The "0 dB sticky spot" near unity
+# =============================================================================
+#
+#  Real EQ knobs have a small notch (called a "detent") at the center
+#  position (0 dB = unity = no change). This makes it easy to FIND zero
+#  by feel. We simulate this by slowing down the encoder when the value
+#  is very close to 0 dB.
+#
+[eq.detent]
+
+# [LIVE] How wide the "sticky" zone is around 0 dB (in EQ macro units).
+#
+#   0.5 = very narrow (only when nearly exactly at 0)
+#   1.0 = narrow (current default — only the closest 1% of the range)
+#   3.0 = wider zone (more obvious slowdown)
+#   5.0 = wide zone (very pronounced detent feel)
+#
+# Larger zones make it easier to STOP at 0 dB. Smaller zones make it
+# easier to PASS THROUGH 0 dB without slowing down.
+#
+range = 1.0
+
+# [LIVE] How much the encoder slows down INSIDE the detent zone.
+#
+# This is a fraction. 0.30 means "30% of normal speed".
+#
+#   0.15 = very sticky (15% speed — strong "wall" feel)
+#   0.30 = noticeable slowdown (current default)
+#   0.50 = mild slowdown
+#   0.80 = barely noticeable
+#   1.00 = no slowdown at all (disables the detent)
+#
+# Lower values = stronger pull toward 0 dB.
+# Higher values = subtler hint without obstructing.
+#
+min_factor = 0.30
+
+
+
+# =============================================================================
+#  [eq.osc] — Communication with Ableton
+# =============================================================================
+#
+#  These control how often EQ updates are sent to Ableton.
+#  Don't change these unless you know what you're doing.
+#
+[eq.osc]
+
+# [LIVE] Minimum time (seconds) between EQ messages sent to Ableton.
+# Prevents flooding Ableton with too many updates per second.
+#
+#   0.010 = ultra-smooth visual but heavy on Ableton's CPU
+#   0.015 = smooth (current default)
+#   0.025 = standard, safe for all systems
+#   0.050 = visibly steppy but very low CPU
+#
+write_throttle = 0.015
+
+# [LIVE] Smallest macro value change worth sending. Smaller changes get
+# skipped to avoid wasting messages.
+#
+#   0.10 = ultra-smooth visual updates
+#   0.15 = smooth (current default)
+#   0.30 = standard
+#   0.50 = slightly steppy but very efficient
+#
+write_epsilon = 0.15
+
+
+
+# =============================================================================
+#  [eq.ramp] — Animation when a flick gesture triggers an action
+# =============================================================================
+#
+#  When you do a double-flick gesture (kill, normalize, boost, restore),
+#  the value doesn't snap instantly — it animates smoothly to its target
+#  over a short period. This setting controls that animation.
+#
+[eq.ramp]
+
+# [LIVE] Fastest ramp (in milliseconds) for very fast flicks.
+#   20 = lightning fast
+#   30 = snappy (current default)
+#   50 = noticeably smooth
+min_ms = 30
+
+# [LIVE] Slowest ramp (in milliseconds) for slow, deliberate flicks.
+#   80  = still pretty fast
+#   100 = balanced (current default)
+#   200 = obviously slow / dramatic
+max_ms = 100
+
+# [RESTART] How often the ramp animation refreshes (in milliseconds).
+# 16ms = ~60 frames per second, smooth.
+# Don't change this unless you have CPU issues.
+tick_ms = 16
+
+
+
+# =============================================================================
+#  [eq.safety] — Safety limits to protect your speakers and ears
+# =============================================================================
+[eq.safety]
+
+# [LIVE] Maximum bass boost via encoder (in EQ macro units).
+#
+# The EQ macro range is 0 to 127, where 107.9 = 0 dB neutral, and
+# 127 = +6 dB max boost. This setting caps how high the bass can be
+# pushed via the joystick alone (the bass cap doesn't apply to mid/high).
+#
+#   107.9 = no boost at all on bass (just keep it neutral or cut)
+#   114.0 = +2 dB max boost (current default — safe for most speakers)
+#   120.0 = +4 dB boost (only do this if you know your system)
+#   127.0 = +6 dB full range (NO SAFETY — can damage subwoofers)
+#
+bass_boost_cap = 114.0
+
+# [LIVE] Asymptotic boost percentage for mid/high bands on double-flick right.
+#
+# When you double-flick right and the band is already ABOVE 0 dB,
+# the band boosts by this percentage of the remaining headroom.
+# So if at +2 dB and headroom is +6 dB, you get a +0.6 dB boost
+# (15% of the remaining +4 dB to ceiling).
+#
+#   0.10 = small boost steps (subtle)
+#   0.15 = current default (musical, asymptotic — never quite reaches +6)
+#   0.25 = larger steps (more dramatic each flick)
+#   0.50 = very large (3-4 flicks to reach max)
+#
+mid_high_boost_pct = 0.15
+
+
+
+# =============================================================================
+#  [trim] — TRIM knob (input gain before EQ)
+# =============================================================================
+#
+#  The TRIM knob controls a Utility device BEFORE the EQ Three in the
+#  rack. It sets the input gain to the EQ — like a real DJ mixer's
+#  trim/gain knob. Range: -∞ dB to +9 dB.
+#
+#  Selected in EQ mode via the Y double-flick rotation:
+#     MID → HIGH → TRIM → LOW → MID → ...
+#
+[trim]
+
+# [LIVE] Time (in seconds) to sweep across the full TRIM range.
+#
+# TRIM is meant to feel FAST and FLUID — for quick gain matching when
+# A/B'ing tracks or pulling back during a build-up.
+#
+#   0.15 = very fast (snap to value)
+#   0.25 = fast (current default, fluid feel)
+#   0.40 = balanced
+#   0.80 = slow, careful
+#
+sweep_seconds = 0.25
+
+# [LIVE] Curve shape (same logic as eq.encoder.curve_exp above).
+# TRIM defaults to 1.0 (pure linear) for instant proportional response.
+curve_exp = 1.0
+
+# [LIVE] Stick smoothing for TRIM specifically.
+smoothing_factor = 0.55
+
+# [LIVE] TRIM dead zone (same logic as eq.encoder.dead_zone).
+dead_zone = 0.18
+
+# [LIVE] Maximum TRIM value in dB. The Utility gain device can go up to
+# +35.5 dB, but we cap it at +9 dB to match real DJM-900 NXS2 trim behavior.
+#
+#   3.0  = conservative cap
+#   6.0  = standard EQ-style cap
+#   9.0  = DJM-900 NXS2 standard (current default)
+#   12.0 = aggressive
+#
+# Going above +9 will not damage anything but feels unusual for a DJ.
+max_db = 9.0
+
+# [LIVE] OSC throttle and epsilon for TRIM (same as eq.osc).
+write_throttle = 0.015
+write_epsilon = 0.15
+
+# [LIVE] Detent at 0 dB (same logic as eq.detent).
+detent_range = 1.0
+detent_min_factor = 0.30
+
+
+
+# =============================================================================
+#  [meter] — DJM-style channel level meter
+# =============================================================================
+#
+#  The vertical LED-style meter beside the EQ knobs shows the real audio
+#  output level coming out of the EQ track. The CLIP indicator at the top
+#  warns you when the signal is approaching dangerous levels.
+#
+[meter]
+
+# [LIVE] dB offset added to Ableton's signal level to display in DJ-friendly terms.
+#
+# Ableton measures level in dBFS (where 0 dBFS = digital clipping ceiling).
+# DJ mixers display level relative to a NOMINAL "0 dB" mark, which is
+# typically -18 dBFS in digital. This offset shifts the display.
+#
+#   +12 = very hot reference (rarely shows red zone)
+#   +18 = broadcast/mastering standard (current default)
+#   +24 = quiet reference (everything looks loud)
+#
+# Lower this if your mixes show too much red, raise it if they show too little.
+#
+reference_offset_db = 18.0
+
+# [LIVE] How fast the meter falls back down after the signal drops (dB per second).
+#
+#   5   = very slow falling (like analog VU)
+#   20  = moderate (current default — looks musical)
+#   60  = fast (modern digital style)
+#   200 = nearly instant
+#
+release_db_per_sec = 20.0
+
+# [LIVE] How long the PEAK indicator (brightest segment) holds at the
+# highest recent level before starting to fall (in seconds).
+#
+#   0.5 = quick peak indicator
+#   1.5 = balanced (current default)
+#   3.0 = lingering peak hold (easier to see momentary peaks)
+#
+peak_hold_seconds = 1.5
+
+# [LIVE] How fast the peak indicator falls after the hold time expires (dB per second).
+peak_fall_db_per_sec = 30.0
+
+
+
+# =============================================================================
+#  [meter.clip] — CLIP indicator behavior
+# =============================================================================
+#
+#  The CLIP light at the top of the meter has TWO levels:
+#    1. WARNING — early yellow/orange — "watch out, getting close"
+#    2. CRITICAL — flashing red — "back off NOW or you'll clip"
+#
+#  Between these two thresholds the color smoothly fades from yellow
+#  through orange to red.
+#
+[meter.clip]
+
+# [LIVE] When the CLIP light starts to show (early warning).
+# This is in our displayed dB scale (where +12 is the top of the meter).
+#
+#   +3  = very early warning (lots of safety margin)
+#   +6  = early (current default — gives you time to react)
+#   +9  = late warning (close to clipping)
+#
+warn_db = 6.0
+
+# [LIVE] When the CLIP light becomes URGENT (flashing red).
+#
+#   +9  = standard urgent threshold (current default)
+#   +11 = very late (clipping basically imminent)
+#
+critical_db = 9.0
+
+# [LIVE] How fast the CLIP light flickers when above the critical threshold.
+# Value is flickers per second (Hz).
+#
+#   2  = slow, calm flicker
+#   4  = moderate (current default)
+#   8  = fast, urgent
+#   12 = strobe-like
+#
+flicker_hz = 4.0
+
+# [LIVE] How long the CLIP light stays lit after the signal drops back
+# below the warning threshold (in seconds). Fades out smoothly during this time.
+#
+#   0.2 = quick fade
+#   0.5 = balanced (current default)
+#   1.0 = lingering
+#
+fadeout_seconds = 0.5
+
+
+
+# =============================================================================
+#  [fx] — FX rack sweep speeds
+# =============================================================================
+#
+#  Each FX macro has its own sweep time. Some macros (like Filter Freq)
+#  need to move fast for performance; others (like Reverb Size) are
+#  set-and-forget so they can be slow.
+#
+[fx]
+
+# [LIVE] Filter Freq sweep time (seconds for full range).
+# This is the macro you use most for performance — keep it fast.
+filter_freq_sweep_s = 1.5
+
+# [LIVE] Filter Resonance sweep time.
+filter_res_sweep_s = 3.0
+
+# [LIVE] Reverb decay sweep time. Usually a "set and forget" parameter.
+reverb_size_sweep_s = 5.0
+
+# [LIVE] FX Send sweep time. Punchy for "throw" effects.
+fx_send_sweep_s = 1.0
+
+# [LIVE] Default sweep time for other macros not listed above.
+default_sweep_s = 3.0
+
+# [LIVE] Stick dead zone for FX layer (separate from EQ dead zone).
+axis_dead_zone = 0.08
+
+# [LIVE] How fast acceleration ramps up when holding the stick in one direction.
+accel_ramp_s = 1.0
+
+# [LIVE] Maximum acceleration multiplier (how much faster you go after holding).
+accel_max_mult = 4.0
+
+# [LIVE] OSC throttle for FX (same logic as eq.osc.write_throttle).
+write_throttle = 0.025
+
+# [LIVE] OSC epsilon for FX (fraction of macro range).
+write_epsilon_frac = 0.001
+
+
+
+# =============================================================================
+#  [fx.delay_fb] — Delay Feedback step control via D-pad
+# =============================================================================
+[fx.delay_fb]
+
+# [LIVE] How many discrete steps the delay feedback has via D-pad.
+steps = 20
+
+# [LIVE] Maximum allowed feedback (fraction of macro range).
+# Keep below 0.95 to prevent infinite feedback runaway.
+clamp_frac = 0.92
+
+# [LIVE] Debounce time between D-pad presses (seconds).
+debounce_s = 0.18
+
+
+
+# =============================================================================
+#  [volume] — SELECT + R-stick volume control
+# =============================================================================
+[volume]
+
+# [LIVE] Dead zone for volume stick.
+dead_zone = 0.12
+
+# [LIVE] How sensitive volume control is. Higher = bigger changes per stick movement.
+sensitivity = 0.004
+
+# [LIVE] Ableton's "unity gain" position (0 dB on the track fader).
+# Default 0.85 is Ableton's standard. Don't change unless you know what you're doing.
+ableton_unity = 0.85
+
+# [LIVE] Minimum value change worth sending to Ableton.
+change_threshold = 0.003
+
+
+
+# =============================================================================
+#  [navigation] — Track/scene navigation feel
+# =============================================================================
+[navigation]
+
+# [LIVE] How far you push the stick before navigation triggers.
+analog_threshold = 0.55
+
+# [LIVE] How long to hold the stick before auto-scroll kicks in (seconds).
+hold_scroll_delay = 0.50
+
+# [LIVE] How fast auto-scroll repeats once it starts (seconds between steps).
+hold_scroll_rate = 0.18
+
+# [LIVE] General stick smoothing for navigation.
+smoothing_factor = 0.18
+
+# [LIVE] Debounce between D-pad presses (seconds).
+dpad_debounce = 0.30
+
+
+
+# =============================================================================
+#  [timing] — System timing values
+# =============================================================================
+[timing]
+
+# [LIVE] Window for R3 double-click to mute (seconds).
+r3_double_click_window = 0.40
+
+# [LIVE] Delay before deferred OSC queries fire (seconds).
+query_defer_time = 0.04
+
+# [LIVE] Periodic Ableton FX/EQ value safety polls (seconds).
+fx_safety_poll_interval = 2.0
+
+# [LIVE] How often the controller watchdog checks for disconnects (seconds).
+watchdog_interval = 1.0
+
+# [LIVE] After this many seconds of no input, perform health check (seconds).
+idle_reprobe_after = 5.0
+
+
+
+# =============================================================================
+#  [ui] — User interface refresh and display
+# =============================================================================
+[ui]
+
+# [RESTART] How often the UI refreshes (in milliseconds).
+# 25ms = 40 frames per second. Lower = smoother but more CPU.
+refresh_ms = 25
+
+# [RESTART] How fast UI elements blink/flicker for status indicators (in milliseconds).
+blink_period_ms = 500
+
+# [RESTART] Initial window width in pixels.
+window_width = 760
+
+# [RESTART] Initial window height in pixels.
+window_height = 900
+
+
+
+# =============================================================================
+#  [network] — OSC communication ports
+# =============================================================================
+[network]
+
+# [RESTART] IP address where Ableton's OSC is listening. Usually localhost.
+osc_host = "127.0.0.1"
+
+# [RESTART] Port to SEND OSC messages to (Ableton's input).
+osc_send_port = 11000
+
+# [RESTART] Port to RECEIVE OSC messages on (FX Machine's input).
+osc_receive_port = 11001
+
+
+
+# =============================================================================
+#  END OF CONFIG
+# =============================================================================
+#
+#  If you've made it this far, you understand the system better than most
+#  software developers. Have fun tuning. Trust your ears.
+#
+#  — MIRA / Modulated_OFC
+#
+# =============================================================================
