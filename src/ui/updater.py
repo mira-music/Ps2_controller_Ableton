@@ -111,6 +111,13 @@ def update_ui(root, lbl):
         meter_right      = st.state["eq_meter_right"]
         meter_peak       = st.state["eq_meter_peak"]
         meter_peak_time  = st.state["eq_meter_peak_time"]
+        
+        # Notification slot
+        notif_text       = st.state["notification_text"]
+        notif_severity   = st.state["notification_severity"]
+        notif_time       = st.state["notification_time"]
+        notif_duration   = st.state["notification_duration"]
+        
 
     if active_slot >= 0 and now > active_until:
         with st._lock:
@@ -357,6 +364,53 @@ def update_ui(root, lbl):
         st.state["eq_meter_peak_time"] = new_old_peak_time
 
     draw_channel_meter(lbl["eq_channel_meter"], current_level, new_old_peak)
+    
+        # ── NOTIFICATION SLOT (Build B Phase 3) ──
+    # Auto-push CLIP notifications when clipping is detected
+    if clip_active and clip_level >= 0.7:
+        from src.helpers import push_notification
+        push_notification("🔴 SIGNAL CLIPPING — reduce gain!", "critical", 1.5)
+    elif clip_active and clip_level >= 0.3:
+        from src.helpers import push_notification
+        push_notification("⚠ Signal approaching clip threshold", "warning", 1.5)
+
+    # Drive the notification label visibility and color
+    if notif_text and notif_time > 0:
+        elapsed_notif = now - notif_time
+        if elapsed_notif < notif_duration:
+            # Still visible — show the notification
+            # Color by severity
+            if notif_severity == "critical":
+                notif_fg = "#ff3b30"    # red
+                notif_bg = "#3a1818"    # dark red background
+            elif notif_severity == "warning":
+                notif_fg = "#ff6c2c"    # orange
+                notif_bg = "#2a1a0a"    # dark orange background
+            else:
+                notif_fg = "#f4d22b"    # yellow
+                notif_bg = "#2a2a0a"    # dark yellow background
+
+            # Fade out in the last 30% of duration
+            fade_start = notif_duration * 0.7
+            if elapsed_notif > fade_start:
+                fade_fraction = (elapsed_notif - fade_start) / (notif_duration - fade_start)
+                # Interpolate fg toward ABL_TEXT_FAINT
+                # Simple approach: just switch to dim at 85%
+                if fade_fraction > 0.5:
+                    notif_fg = ABL_TEXT_FAINT
+                    notif_bg = ABL_BG
+            
+            if lbl["notification"].cget("text") != notif_text:
+                lbl["notification"].config(text=notif_text, fg=notif_fg, bg=notif_bg)
+            elif lbl["notification"].cget("fg") != notif_fg:
+                lbl["notification"].config(fg=notif_fg, bg=notif_bg)
+        else:
+            # Duration expired — hide
+            if lbl["notification"].cget("text") != "":
+                lbl["notification"].config(text="", bg=ABL_BG)
+    else:
+        if lbl["notification"].cget("text") != "":
+            lbl["notification"].config(text="", bg=ABL_BG)
 
     # ── FX PANEL TITLE ──
     fx_color = int_to_hex_color(fx_track_color, ABL_TEXT)

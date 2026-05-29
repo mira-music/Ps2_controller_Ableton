@@ -144,3 +144,32 @@ def eq_encoder_delta(stick_value, dt):
     velocity = (macro_range / cfg.EQ_SWEEP_SECONDS) * shaped
     sign = 1.0 if stick_value > 0 else -1.0
     return velocity * sign * dt
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  NOTIFICATION SYSTEM (Build B Phase 3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def push_notification(text, severity="info", duration=3.0):
+    """
+    Push a transient notification to the dedicated UI notification slot.
+
+    This is separate from state["last_action"] — notifications are for
+    important warnings that should be visible even when the action line
+    is showing something else.
+
+    Args:
+        text:     message to display
+        severity: "info" (yellow), "warning" (orange), "critical" (red)
+        duration: how long to show in seconds (default 3s)
+
+    Usage:
+        push_notification("⚠ Config has errors", "warning", 5.0)
+        push_notification("🔴 CLIPPING!", "critical", 2.0)
+        push_notification("✓ Config reloaded", "info", 2.0)
+    """
+    import time
+    with st._lock:
+        st.state["notification_text"]     = text
+        st.state["notification_severity"] = severity
+        st.state["notification_time"]     = time.perf_counter()
+        st.state["notification_duration"] = duration

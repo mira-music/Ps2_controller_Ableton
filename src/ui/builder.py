@@ -255,6 +255,25 @@ def build_ui(root):
     lbl_eq_status.pack(fill="x", pady=(2, 0))
 
     hline(root, pady=6)
+    
+    #
+    # ══════════════════════════════════════════════════════════
+    #  NOTIFICATION SLOT (Build B Phase 3)
+    #  Dedicated area for transient warnings (config errors,
+    #  clipping alerts, restart-required notices). Separate from
+    #  the action line at the bottom.
+    # ══════════════════════════════════════════════════════════
+    notif_frame = tk.Frame(root, bg=ABL_BG)
+    notif_frame.pack(fill="x", padx=8, pady=(0, 2))
+    lbl_notification = tk.Label(
+        notif_frame,
+        text="",
+        bg=ABL_BG,
+        fg=ABL_TEXT_FAINT,
+        font=F_LABEL_SMALL,
+        anchor="w",
+    )
+    lbl_notification.pack(fill="x")
 
     # ══════════════════════════════════════════════════════════
     #  FX MACHINE PANEL (full width)
@@ -385,5 +404,6 @@ def build_ui(root):
         "eq_glow":          eq_glow,
         "eq_cells":         eq_cells,
         "eq_status":        lbl_eq_status,
+        "notification":     lbl_notification,
         "eq_channel_meter": eq_channel_meter,
     }

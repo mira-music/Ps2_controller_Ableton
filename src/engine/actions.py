@@ -148,6 +148,15 @@ def action_force_refresh():
 
     # Always log the result (UI action line may get overwritten by Ableton refresh)
     log.info(f"Config reload result: {config_msg}")
+    
+        # Push to notification slot (visible even if action line gets overwritten)
+    from src.helpers import push_notification
+    if not result["success"]:
+        push_notification(config_msg, "critical", 5.0)
+    elif result["restart_required"]:
+        push_notification(config_msg, "warning", 4.0)
+    elif result["changes_applied"]:
+        push_notification(config_msg, "info", 2.0)
 
     # 2. Refresh Ableton session in background
     with st._lock:

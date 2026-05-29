@@ -409,7 +409,7 @@ detent_min_factor = 0.30
 #
 # Lower this if your mixes show too much red, raise it if they show too little.
 #
-reference_offset_db = 9
+reference_offset_db = 8.7
 
 # [LIVE] How fast the meter falls back down after the signal drops (dB per second).
 #

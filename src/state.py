@@ -164,13 +164,21 @@ state = {
     "clip_level":           0.0,
     "clip_last_active_time": 0.0,
 
-    # ─── UI flash + last action ───
+        # ─── UI flash + last action ───
     "last_action":      "Starting up…",
     "flash_scene":      False,
     "flash_track":      False,
     "flash_bmark":      False,
     "flash_group":      False,
     "flash_until":      0.0,
+
+    # ─── Notification slot (Build B Phase 3) ───
+    # A dedicated UI area for transient warnings, separate from last_action.
+    # Severity: "info" (yellow), "warning" (orange), "critical" (red)
+    "notification_text":     "",        # message to display (empty = hidden)
+    "notification_severity": "info",    # "info", "warning", or "critical"
+    "notification_time":     0.0,       # when the notification was pushed
+    "notification_duration": 3.0,       # how long to show (seconds)
 
     # ─── Polling timing ───
     "_query_requested_at": 0.0,
