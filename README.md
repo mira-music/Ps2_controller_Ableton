@@ -4,51 +4,102 @@
 
 ### A USB Gamepad Turned Into a Live Performance Instrument for Ableton Live
 
+*Built by a DJ, for DJs. Modeled after the Pioneer DJM-900 NXS2 channel strip.*
+
 ![FX Machine Main UI](docs/screenshots/fx_machine_ui_v_9_11.png)
-
-*Designed for melodic house & progressive deep house*
-
-**v9.11** · Modeled after the Pioneer DJM-900 NXS2 channel strip topology
 
 ---
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org)
-[![Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
+[![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey.svg)]()
 [![Ableton](https://img.shields.io/badge/Ableton-Live%2010%2F11%2F12-black.svg)](https://www.ableton.com)
-[![License](https://img.shields.io/badge/license-Non--Commercial-red.svg)](#license)
+[![Version](https://img.shields.io/badge/version-v1.0.0--toml-green.svg)]()
+[![License](https://img.shields.io/badge/license-Non--Commercial-red.svg)](#-license)
+
+**Latest: v1.0.0-toml** · TOML hot-reload + portable .exe builder shipped
 
 </div>
 
 ---
 
-## 🎯 What Is This?
+## 🎯 What It Does
 
-**FX Machine** transforms a generic USB gamepad into a precision instrument for live electronic music performance. It bridges a PlayStation-style controller to Ableton Live via OSC, exposing two parallel effect racks — a 3-band kill EQ and an 8-macro FX rack — that you can manipulate with **encoder-style sticks**, **double-flick gestures**, and **momentary button effects**.
+FX Machine bridges a generic USB gamepad to Ableton Live via OSC, exposing a **3-band kill EQ** and an **8-macro FX rack** through a custom gesture vocabulary. Push a stick, hold a button, double-flick to fire a kill — all in real time, with values you tune through a plain-text config file while the app is running.
 
-This isn't a MIDI mapping. It's a custom-built performance system with its own gesture language, safety logic, visual feedback layer, and **hot-reloadable TOML config** so you can tune feel on the fly without restarting.
+It is not a MIDI mapping. It's a performance instrument with its own gesture engine, safety logic, visual feedback, and hot-reloadable configuration system.
 
 ```
        Gamepad ──── USB ──── FX Machine ──── OSC ──── Ableton Live
                               (Python)              (AbletonOSC)
                                   │
                                   ▼
-                          Real-time Tkinter UI
+                          Real-time UI
                           (knobs · meters · status)
 ```
 
 ---
 
-## ✨ Key Features
+## 🎬 At a Glance
 
-### 🎚️ Dual-Rack Signal Chain (DJM-900 Style)
+<div align="center">
 
-The system inserts two racks in series before your master output, exactly like a real DJ mixer channel strip:
+| Default mode | EQ mode active |
+|:---:|:---:|
+| ![Main UI](docs/screenshots/fx_machine_ui_v_9_11.png) | ![EQ Mode](docs/screenshots/ableton_fx_machine.png) |
+
+</div>
+
+Two-column layout: vertical EQ stack with channel meter on the left, session navigation on the right. FX panel spans full width below. Built with Tkinter, rendered at 40 Hz, with canvas-drawn metallic knobs and live OSC-driven meters.
+
+---
+
+## 🚀 Quick Start
+
+### Option A — Run from source (if you have Python 3.12+)
+
+```bash
+pip install pygame python-osc
+python run.py
+```
+
+### Option B — Run the portable .exe (no Python needed)
+
+1. Download the `dist/FX_Machine/` folder
+2. Double-click `FX_Machine.exe`
+3. On first launch it creates `config/active.toml` automatically
+
+To build the .exe yourself:
+
+```bash
+pip install pyinstaller
+python build.py
+```
+
+Output appears at `dist/FX_Machine/FX_Machine.exe`. To distribute: zip the entire `dist/FX_Machine/` folder and share it.
+
+### Verify your setup
+
+Before your first session, run the diagnostic tool — it runs 150+ automated health checks:
+
+```bash
+python diagnose.py
+```
+
+Green checks mean you're good to perform. Red errors tell you exactly what to fix.
+
+---
+
+## ✨ What's In It
+
+### 🎚️ The Signal Chain (DJM-900 Style)
+
+Two racks inserted in series before your master output, just like a real DJ mixer channel:
 
 ```
 All instrument tracks ──▶ Return A
                               │
                               ▼
-                       ~ EQ Macros      (3-band kill EQ, shapes the source)
+                       ~ EQ Macros      (3-band kill EQ — shapes the source)
                               │
                               ▼
                        ~ FX Macros      (filter / reverb / delay / stutter)
@@ -57,68 +108,10 @@ All instrument tracks ──▶ Return A
                           Master
 ```
 
-### 🎛️ EQ Engine — Encoder + Smart Gestures
+The FX rack uses a nested wet/dry rack so reverb and delay tails **continue ringing after you cut the send** — exactly like a hardware DJ mixer's send/return loop. This enables the classic "throw and let it tail" technique (push FX Send to max, release, watch the dry signal continue clean while the wet tail decays naturally over several seconds).
 
-Three bands (Low / Mid / High), each with **two gesture modes** on the right stick:
-
-| Gesture | Action |
-|---|---|
-| **Stick X right (held)** | Encoder: boost current band, value HOLDS on release |
-| **Stick X left (held)** | Encoder: cut current band, value HOLDS on release |
-| **Stick Y up double-flick** | Switch to band above (wraps: MID → HIGH → LOW → MID) |
-| **Stick Y down double-flick** | Switch to band below (wraps: MID → LOW → HIGH → MID) |
-| **Stick X left double-flick** | Smart kill / normalize (see logic below) |
-| **Stick X right double-flick** | Smart restore / boost (see logic below) |
-
-#### Smart Kill/Normalize Logic (Double-flick LEFT)
-
-```
-if current_value > 0 dB:
-    → normalize back to 0 dB
-else (current_value ≤ 0 dB):
-    if band is BASS:
-        → KILL to -∞ dB
-    else (MID or HIGH):
-        → cut to -19 dB
-```
-
-#### Smart Restore/Boost Logic (Double-flick RIGHT)
-
-```
-if current_value < 0 dB:
-    → restore to 0 dB
-else (current_value ≥ 0 dB):
-    if band is BASS:
-        → 🚫 BLOCKED (speaker safety)
-    else (MID or HIGH):
-        → boost by 15% of remaining headroom (asymptotic)
-```
-
-### ⚡ FX Engine — 8 Macros, 5 Effects
-
-| Slot | Macro | Effect | Range |
-|---|---|---|---|
-| 1 | Filter Freq | Auto Filter cutoff (logarithmic) | 20 Hz – 20 kHz |
-| 2 | Filter Mode | Auto Filter type | 0 = HP, 1 = LP |
-| 3 | Filter Res | Auto Filter resonance | 20% – 100% |
-| 4 | Stutter | Beat Repeat on/off | 0 / max |
-| 5 | Reverb Size | Dark Hall decay | 200ms – 60s |
-| 6 | FX Send | Wet/dry crossfade (Utility-based) | 0% – 100% |
-| 7 | Delay FB | Long Digi Delay feedback | 0% – 92% (capped) |
-| 8 | Width | Stereo Utility width | 0% – 200% |
-
-#### Momentary Buttons (FX Layer = hold L1)
-
-| Button | Effect |
-|---|---|
-| **L1 + X** | 💥 STUTTER (jam to max while held) |
-| **L1 + O** | 🔻 BASS CUT (HP filter @ 200 Hz while held, restores snapshot on release) |
-| **L1 + □** | 🌫 FX SEND THROW (jam to max while held, restores snapshot on release) |
-| **L1 + △** | ▶▶ Launch scene |
-
-#### 🔀 Internal Wet/Dry Routing — The "Throw and Tail" Trick
-
-The FX rack isn't a simple serial chain. It uses a **nested wet/dry rack** so that turning off the FX Send doesn't kill the reverb and delay tails — they ring out naturally, exactly like a real DJ mixer's send/return loop.
+<details>
+<summary><b>📖 Click for deep dive on internal wet/dry routing</b></summary>
 
 ```
 Audio Effect Rack (~ FX Macros)
@@ -141,136 +134,83 @@ Audio Effect Rack (~ FX Macros)
 └── Utility               ← Width macro (stereo width)
 ```
 
-##### Why This Matters
+**Why this matters**: If FX Send were a simple wet/dry knob in series, dropping it to 0 would cut everything dry. Instead, the FX Send macro controls how much signal *feeds into* the wet chain. The dry path always passes through, and the wet chain's existing reverb decay and delay feedback keep running even after you stop feeding it new signal.
 
-If FX Send were a simple "wet mix" knob in series with the reverb/delay, dropping it to 0 would **cut everything dry too**. That's not how a real DJ mixer works. On a Pioneer DJM-900, the send/return loop has two key properties:
+**The "throw and tail" technique**:
+1. Crank FX Send to max (L1+□ throw button)
+2. Release → FX Send snaps back to 0
+3. The dry signal continues clean
+4. Reverb decays naturally for 30+ seconds
+5. Delay feedback bounces with the rhythm you set
 
-1. **The dry signal always passes through**, regardless of send amount
-2. **When you stop sending to the FX, the existing reverb/delay tails continue to decay naturally**
+You can stack throws to build walls of tails, then kill the bass and drop a fresh element — the tails carry the energy through the transition. Classic Ben Böhmer / Yotto / Nora En Pure move.
 
-This design replicates both behaviors:
+</details>
 
-| FX Send macro value | Behavior |
+---
+
+### 🎛️ EQ Engine — Encoder + Smart Gestures
+
+Three bands (Low / Mid / High), controlled by the right stick with two distinct gesture modes.
+
+#### Continuous control (X-axis encoder)
+
+| Action | Result |
 |---|---|
-| **100% (max)** | Full signal feeds into the wet chain → maximum reverb + delay |
-| **50%** | Half signal feeds in → moderate wet tails |
-| **0% (off)** | Nothing new enters the wet chain, BUT the **reverb decay continues** and the **delay buffer keeps feeding back** until they fade naturally |
+| Stick X right (held) | Boost current band, value HOLDS on release |
+| Stick X left (held) | Cut current band, value HOLDS on release |
 
-##### The "Throw and Let It Tail" Technique
+The encoder uses a **velocity-based model with curve shaping** — push hard for fast sweeps, push gently for precise tweaks. A sticky 0 dB detent slows the encoder when crossing neutral, mimicking the tactile feel of a real EQ knob at noon.
 
-This routing is what enables the throw-and-tail move used in melodic house/techno:
+#### Discrete actions (double-flick gestures)
 
+| Gesture | Action |
+|---|---|
+| Stick X left double-flick | **Smart kill / normalize** |
+| Stick X right double-flick | **Smart restore / boost** |
+| Stick Y up double-flick | Switch band up (wraps MID → HIGH → LOW → MID) |
+| Stick Y down double-flick | Switch band down (wraps MID → LOW → HIGH → MID) |
+
+The "smart" actions are context-aware:
+
+**Double-flick LEFT** behavior:
 ```
-1. Crank FX Send to max (L1+□ throw)        → big wet swell on the next 1-2 bars
-2. Release the throw button                  → FX Send snaps back to 0
-3. The dry signal continues clean            → but the tail keeps ringing
-4. Reverb decays for 30+ seconds             → ambient atmosphere
-5. Delay feedback continues bouncing         → rhythmic echoes
+if current_value > 0 dB:
+    → normalize to 0 dB (pull it back to neutral)
+else:
+    if BASS: → KILL to -∞ dB
+    else (MID/HIGH): → cut to -19 dB
 ```
 
-You can stack multiple throws to build up a wall of tails, then **kill the bass + drop a fresh element** — the tails carry the energy while the new sound establishes itself. Classic Ben Böhmer / Yotto / Nora En Pure move.
+**Double-flick RIGHT** behavior:
+```
+if current_value < 0 dB:
+    → restore to 0 dB
+else if MID or HIGH:
+    → boost by 15% of remaining headroom (asymptotic)
+else (BASS):
+    → 🚫 BLOCKED (sub safety)
+```
 
-##### Inner vs Outer Chain Macro Assignment
+<details>
+<summary><b>📖 Click for the math behind the encoder feel</b></summary>
 
-| Macro | Path | Effect on signal |
-|---|---|---|
-| Filter Freq | Outer (main) | Affects everything — dry AND wet |
-| Filter Mode | Outer (main) | Affects everything — dry AND wet |
-| Filter Res | Outer (main) | Affects everything — dry AND wet |
-| Stutter | Outer (main) | Affects everything — dry AND wet |
-| **FX Send** | **Inner (gain into wet chain)** | **Controls how much new signal feeds the FX** |
-| Reverb Size | Inner (wet chain) | Adjusts reverb decay time |
-| Delay FB | Inner (wet chain) | Adjusts delay feedback amount |
-| Width | Outer (final) | Stereo widening on the entire output |
-
-This means **you can filter or stutter the wet tails** by sweeping Filter Freq or hitting STUTTER — the outer effects process the combined dry+wet output. Powerful for transitions where you sweep down the cutoff while letting reverb tails ring through, then re-open the filter on the drop.
-
-##### Recovery Behavior on L1 Release
-
-When you release L1 (exit FX mode), the recovery system honors this routing:
-
-- **Filter Freq** → restored to baseline (unless filter-locked via L1+L3)
-- **FX Send** → snapped to 0 (unless wet-locked via L1+R3)
-- **Stutter** → snapped to 0 always
-- **Reverb Size, Delay FB** → left untouched (the tails keep their character)
-
-So a typical performance flow is:
-
-1. Hold L1 (enter FX mode, view jumps to ~ FX Macros)
-2. Sweep filter down, push FX Send to 50%, push Delay FB to 70%
-3. Release L1 → Filter snaps back to neutral, FX Send drops to 0, **but the wet tails keep ringing with the delay rhythm you set**
-4. The track is now back to dry with ambient washing over it
-
-This is why **lock states matter** — if you want to keep FX Send at 50% across releases (for a wet bath effect), toggle wet-lock with L1+R3 before releasing L1.
-
-### 📊 DJM-Style Channel Meter
-
-A 24-segment vertical LED meter beside the EQ stack shows **real-time audio output level** from the EQ track, with:
-
-- Green zone (0 – 0 dB)
-- Yellow zone (0 – +3 dB)
-- Red zone (+3 – +6 dB)
-- **Peak hold** indicator (1.5s hold, then decay)
-- Live data from Ableton via `output_meter_left/right` listeners
-
-### 🎮 Controller Layers
-
-| Layer | Trigger | Behavior |
-|---|---|---|
-| **Navigation** | Default | L-stick = track/scene, D-pad = bookmarks/groups |
-| **FX Mode** | Hold L1 | Both sticks control FX macros, view follows |
-| **EQ Mode** | Tap R3 | Right stick = EQ encoder + gestures |
-| **Volume** | Hold SELECT | Right stick Y = track volume |
-
----
-
-## 📸 Gallery
-
-### Default / Navigation Mode
-
-<div align="center">
-
-![Main UI](docs/screenshots/fx_machine_ui_v_9_11.png)
-
-</div>
-
-Two-column layout: vertical EQ stack with DJM-900 style channel meter on the left, session navigation info on the right (bookmarks, groups, track / scene / clip names, position counters, volume display, modifier pills). FX panel spans the full width below.
-
-The interface is built with Tkinter and rendered at 40 Hz. Knob bodies use canvas-drawn metallic gradients with white indicator lines, dB tick labels around the perimeter, and subtle glow rings to indicate selected/armed states.
-
-### EQ Mode Active
-
-<div align="center">
-
-![EQ Mode Active](docs/screenshots/ableton_fx_machine.png)
-
-</div>
-
-When EQ mode is toggled on (R3 in nav layer), the selected band glows white and the status bar shows the active controls. The right stick becomes an encoder for value control on the X axis, with double-flick gestures for band switching (Y) and smart kill / normalize / boost actions (X). The real-time audio output meter responds to the EQ track's actual signal level via OSC listeners on Ableton's `output_meter_left/right`.
-
----
-
-## 🧮 The Math Behind the Feel
-
-### Why the Encoder Isn't Linear
-
-A real DJ wants **fine control near zero** and **fast sweeps at the edges**. So the encoder uses a curved velocity function:
+#### Why the encoder isn't linear
 
 ```python
 delta = (macro_range / sweep_seconds) × (stick_deflection ^ curve_exp)
 ```
 
-Where:
-- `sweep_seconds = 0.3` — time to sweep the full range at full deflection
-- `curve_exp = 1.0` — pure linear response (proportional to stick position)
+- `sweep_seconds = 0.3` — full-range sweep time at max stick deflection
+- `curve_exp = 1.0` — pure linear response
 
-Tuning these values changes the feel dramatically. A higher `curve_exp` (1.3+) adds easing near rest (precise tweaks), while `1.0` gives instant proportional response (aggressive, performer-friendly). All values are hot-reloadable via the TOML config — see [Configuration](#️-configuration) below.
+Higher `curve_exp` (1.3+) adds easing near rest for precise tweaks. `1.0` gives instant proportional response — aggressive and performer-friendly. All values tunable via the TOML config — see [Configuration](#️-configuration).
 
-### Why 0 dB Isn't in the Middle of the Macro Range
+#### Why 0 dB isn't in the middle of the macro range
 
-Ableton's EQ Three uses a **logarithmic gain scale**: -∞ to 0 dB on the cut side, 0 to +6 dB on the boost side. The cut side has infinite range; the boost side only 6 dB. So in macro space (0–127), neutral 0 dB lives at **macro value 107.9**, not 64.
+Ableton's EQ Three uses a logarithmic gain scale: -∞ to 0 dB on the cut side, 0 to +6 dB on the boost side. In macro space (0–127), neutral 0 dB lives at **macro value 107.9**, not 64.
 
-If we used a linear mapping (stick center → macro 64 → -13.8 dB), the EQ would feel completely wrong. Instead, the system uses **empirical calibration**:
+If we used a linear mapping (stick center → macro 64 → -13.8 dB), the EQ would feel completely wrong. Instead, the system uses empirical calibration:
 
 | Macro Value | dB Output |
 |---:|---:|
@@ -282,11 +222,11 @@ If we used a linear mapping (stick center → macro 64 → -13.8 dB), the EQ wou
 | 114 | +2 dB (bass safety cap) |
 | 127 | +6 dB (max) |
 
-The encoder works in **macro units per second**, not stick-position-to-dB mapping. This makes the response feel symmetric even though the underlying curve isn't.
+The encoder works in **macro units per second**, not stick-position-to-dB. This makes the response feel symmetric even though the underlying dB curve isn't.
 
-### Sticky 0 dB Detent
+#### Sticky 0 dB detent
 
-When the encoder is **near neutral** (within ±1 macro unit of 0 dB), it slows down to 30% speed. This mimics the tactile detent on real EQ knobs at noon, making it easy to "find" 0 dB without overshooting — without becoming a wall that fights against intentional sweeps.
+Within ±1 macro unit of neutral, the encoder slows to 30% speed:
 
 ```python
 distance = abs(current_value - 107.9)
@@ -295,9 +235,9 @@ if distance < 1.0:
     delta *= detent_factor
 ```
 
-### Double-Flick Gesture Detection
+Mimics the tactile detent on real EQ knobs at noon without becoming a wall that fights sweeps.
 
-A double-flick is a state machine:
+#### Double-flick state machine
 
 ```
        extreme         center         extreme
@@ -305,15 +245,14 @@ A double-flick is a state machine:
   ◀───────── timeout (380ms) ─────────────────▶ reset
 ```
 
-- **EQ_FLICK_EXTREME = 0.90** — stick must reach 90% deflection to count as "flicked"
-- **EQ_FLICK_RETURN = 0.22** — must drop below 22% to count as "returned"
-- **EQ_FLICK_TIMEOUT_MS = 380** — second flick must arrive within 380ms
+- `EQ_FLICK_EXTREME = 0.90` — stick must reach 90% deflection
+- `EQ_FLICK_RETURN = 0.22` — must drop below 22% to count as "returned"
+- `EQ_FLICK_TIMEOUT_MS = 380` — second flick must arrive within 380ms
+- Same direction required for second flick; different direction or timeout = silent reset
 
-Same direction required for second flick. Different direction or timeout → silent reset.
+#### Cubic ease-out ramps
 
-### Cubic Ease-Out Ramps
-
-When a gesture triggers an action (e.g., kill bass), the system animates the macro change over 30–100ms using a **cubic ease-out** curve:
+When a gesture triggers an action (kill, normalize, etc.), the macro value animates over 30–100ms using:
 
 ```python
 progress = elapsed / duration            # 0.0 → 1.0
@@ -321,157 +260,246 @@ eased = 1.0 - (1.0 - progress) ** 3      # cubic ease-out
 current_value = start + (target - start) * eased
 ```
 
-Why cubic ease-out: linear ramps sound abrupt at the end. Exponential ramps (`1 - e^-3x`) sound too slow at the start. Cubic ease-out is musically natural and click-free.
+Linear ramps sound abrupt. Exponential ramps drag at the start. Cubic ease-out is musically natural and click-free.
 
-### Axis Dominance Suppression (Mutual Exclusion)
+#### Axis dominance suppression
 
-The right stick is one physical input controlling two logical things (X = value, Y = band switch). To prevent accidental cross-axis triggers when diagonal motion happens, both axes use **strict mutual exclusion**:
+The right stick is one physical input controlling two logical things (X = value, Y = band). To prevent diagonal motion from triggering both:
 
 ```python
-# Y dominance check
 if abs(y) > abs(x) * 3.0:
-    # Y dominates → suppress X completely, reset X gesture state
+    # Y dominates → suppress X completely
     return
 
-# X gesture freezes Y while in progress
 if x_in_gesture:
+    # X gesture in progress → freeze Y
     reset_y_gesture_state()
     return
 ```
 
-If Y is more than 3× larger than X, Y wins entirely. Conversely, once an X gesture has started (extreme deflection detected), Y is frozen until the X gesture either completes or times out. This bidirectional protection prevents diagonal flicks from firing both a band switch AND a value action by accident.
+Both axes use mutual exclusion. Once one wins, the other is frozen until the first completes or times out.
+
+</details>
+
+---
+
+### ⚡ FX Engine — 8 Macros, 5 Effects
+
+| Slot | Macro | Effect | Range |
+|---|---|---|---|
+| 1 | Filter Freq | Auto Filter cutoff (logarithmic) | 20 Hz – 20 kHz |
+| 2 | Filter Mode | Auto Filter type | 0 = HP, 1 = LP |
+| 3 | Filter Res | Auto Filter resonance | 20% – 100% |
+| 4 | Stutter | Beat Repeat on/off | 0 / max |
+| 5 | Reverb Size | Dark Hall decay | 200ms – 60s |
+| 6 | FX Send | Wet chain gain (Utility-based) | 0% – 100% |
+| 7 | Delay FB | Long Digi Delay feedback | 0% – 92% (capped) |
+| 8 | Width | Stereo Utility width | 0% – 200% |
+
+#### Momentary buttons (hold L1 to enter FX mode)
+
+| Button | Effect |
+|---|---|
+| **L1 + X** | 💥 STUTTER (jam to max while held) |
+| **L1 + O** | 🔻 BASS CUT (HP filter @ 200 Hz while held, restores snapshot on release) |
+| **L1 + □** | 🌫 FX SEND THROW (jam to max while held, restores snapshot on release) |
+| **L1 + △** | Launch scene |
+| **L1 + L3** | Toggle filter lock |
+| **L1 + R3** | Toggle wet lock |
+
+On L1 release, the system runs recovery: Filter Freq returns to baseline (unless filter-locked), FX Send drops to 0 (unless wet-locked), Stutter snaps to 0. Reverb Size and Delay FB are left untouched so tails keep their character.
+
+---
+
+### 📊 DJM-Style Channel Meter
+
+A 24-segment vertical LED meter beside the EQ stack shows real-time audio output level from the EQ track via Ableton's `output_meter_left/right` listeners. Color zones: green (safe), yellow (loud), red (clipping). Peak-hold indicator hovers at recent peaks for 1.5s before decaying.
+
+> 🚧 **Build B (in progress)** will redesign this as a 15-segment -30 to +12 dB meter matching the DJM-900 NXS2 reference, plus a CLIP indicator with smooth yellow→red fade and configurable thresholds.
 
 ---
 
 ## ⚙️ Configuration
 
-FX Machine ships with a powerful TOML-based configuration system that lets you tune every aspect of the controller's feel **without editing any code**. Changes can be applied while the app is running — no restart required for most settings.
+FX Machine ships with a **TOML-based configuration system** that lets you tune every aspect of the controller's feel without editing code. Changes apply instantly via `SELECT + START` on the controller — no app restart needed for most settings.
 
-### Where Config Lives
+### The config folder
 
 ```
 config/
-├── default.toml           Factory template (do not edit — your safety net)
-├── active.toml            Your current settings (this is what the app reads)
-├── EXAMPLES.toml          Ready-to-copy preset snippets
-├── README.md              Explainer for the folder
-└── presets/               Your saved profiles
+├── default.toml          Factory template — don't edit (your safety net)
+├── active.toml           Your current settings — edit this
+├── EXAMPLES.toml         5 ready-to-copy preset snippets
+├── README.md             Detailed explainer for non-programmers
+└── presets/              Save your own profiles here
 ```
 
-On first launch, the app automatically creates `active.toml` by copying `default.toml`. You edit `active.toml` going forward.
+On first launch, the app auto-creates `active.toml` by copying `default.toml`.
 
-### How to Tune
+### Hot-reload workflow
 
-1. Open `config/active.toml` in any text editor (Notepad++, VS Code, etc.)
-2. Read the comments — every value is explained in plain English with recommended ranges
-3. Change a number and save
-4. In the FX Machine app, press **`SELECT + START`** on your controller (or click the **`⟳ REFRESH`** button)
+1. Open `config/active.toml` in any text editor
+2. Read the comments — every value is explained in plain English with safe ranges
+3. Change a number, save the file
+4. Press **`SELECT + START`** on your controller (or click **⟳ REFRESH** in the UI)
 5. Your changes apply instantly
 
-If you write invalid TOML, the app warns you on reload and **keeps the previous working values** — your show is never broken.
+If you write invalid TOML, the app keeps your previous working values and shows a clear error — your show is never broken by a typo.
 
-### Hot-Reloadable vs Restart-Required
+### What you can tune
 
-Most values reload instantly (marked `[LIVE]` in the comments). A few system-level settings need a full app restart (marked `[RESTART]`):
+**~30 hot-reloadable parameters** spanning:
 
-- UI refresh rate
-- Window size
-- OSC network ports
-- EQ ramp animation tick rate
-
-When you reload and a `[RESTART]` value has changed, the app tells you in the status bar:
-```
-🔄 ✓ Config reload — 0 applied, ⚠ 1 need restart
-```
-
-### Tunable Categories
-
-The TOML file is organized into logical sections, each controlling a feature area:
-
-| Section | Controls |
+| Section | What it controls |
 |---|---|
-| `[eq.encoder]` | EQ stick sweep speed, curve shape, smoothing, deadzone |
-| `[eq.dominance]` | How decisive Y vs X must be in EQ mode |
-| `[eq.flick]` | Double-flick gesture timing thresholds |
+| `[eq.encoder]` | Stick sweep speed, curve shape, smoothing, deadzone |
+| `[eq.dominance]` | How decisive Y vs X must be to trigger band-switch |
+| `[eq.flick]` | Double-flick timing thresholds |
 | `[eq.detent]` | Sticky 0 dB feel near unity |
-| `[eq.osc]` | OSC message throttling for EQ |
-| `[eq.ramp]` | Animation duration for kill/normalize/boost actions |
-| `[eq.safety]` | Bass boost cap, boost percentage per flick |
-| `[trim]` | TRIM knob feel (sweep, curve, max gain) — Build B |
-| `[meter]` | Channel meter reference offset, ballistics, peak hold |
-| `[meter.clip]` | CLIP indicator thresholds and flicker behavior — Build B |
+| `[eq.ramp]` | Animation duration for actions |
+| `[eq.safety]` | Bass boost cap, headroom boost percentage |
+| `[trim]` | TRIM knob feel (Build B) |
+| `[meter]` | Channel meter ballistics, peak hold |
+| `[meter.clip]` | CLIP indicator thresholds & flicker (Build B) |
 | `[fx]` | Per-macro sweep speeds, deadzone, acceleration |
-| `[fx.delay_fb]` | Delay feedback discrete-stepping behavior |
-| `[volume]` | SELECT+R-stick volume control sensitivity |
+| `[fx.delay_fb]` | Delay feedback discrete stepping |
+| `[volume]` | SELECT+R-stick volume sensitivity |
 | `[navigation]` | Track/scene scrolling responsiveness |
-| `[timing]` | Internal timing for polling, watchdog, debouncing |
-| `[ui]` | UI refresh rate, window geometry (restart required) |
-| `[network]` | OSC host and ports (restart required) |
+| `[timing]` | Polling, watchdog, debounce intervals |
+| `[ui]` | UI refresh rate, window size (RESTART required) |
+| `[network]` | OSC ports (RESTART required) |
 
-### Ready-Made Presets
+### Ready-made presets
 
 Five preset snippets ship in `config/EXAMPLES.toml`:
 
-- **PUNCHY CLUB** — aggressive, fast, decisive (for live drops)
-- **STUDIO PRECISE** — slow, surgical, fine-grained (for mixing)
-- **BEGINNER FORGIVING** — easy controls, hard to make mistakes
-- **RADIO/STREAM SAFE** — strict gain control, paranoid metering
-- **VINTAGE ANALOG FEEL** — slow, springy, mechanical detent
+- 🔥 **PUNCHY CLUB** — aggressive, fast, decisive (peak-time energy)
+- 🎚️ **STUDIO PRECISE** — slow, surgical, fine-grained (mixing/arrangement)
+- 👋 **BEGINNER FORGIVING** — easy controls, hard to make mistakes
+- 📻 **RADIO/STREAM SAFE** — strict gain control, paranoid metering
+- 🎨 **VINTAGE ANALOG FEEL** — springy, mechanical, gentle ramps
 
-To use a preset, copy the relevant TOML sections from `EXAMPLES.toml` into your `active.toml`, save, and reload. Mix and match — encoder settings from one preset, meter settings from another, etc.
+Copy snippets from `EXAMPLES.toml` into your `active.toml`, mix and match across sections.
 
-### Saving Your Own Presets
+### Save your own profiles
 
-Once `active.toml` feels great:
-
-1. Copy `active.toml` to `presets/` and rename (e.g., `presets/my_club_set.toml`)
-2. To recall later: copy any preset back to `active.toml` and reload
-
-Send `.toml` files to other producers to share your tuning — they drop them in their `config/` folder and they get your exact feel.
-
-### Resetting to Defaults
-
-If you ever want a fresh start:
+When `active.toml` feels perfect, save it:
 
 ```bash
-# Windows
-del config\active.toml
-python run.py
+copy config\active.toml config\presets\my_club_set.toml
 ```
 
-The app recreates `active.toml` from `default.toml` automatically.
+Send `.toml` files to other producers to share your tuning — they drop yours into their `config/` folder, rename to `active.toml`, reload. They get your exact feel.
 
-### Example: Tuning the EQ Encoder
+---
 
-Edit `config/active.toml`:
+## 🎚️ Ableton Setup
 
-```toml
-[eq.encoder]
+### 1. Install AbletonOSC
 
-# Time in seconds to sweep across the FULL EQ range at maximum stick push.
-# Lower = faster/aggressive, Higher = slower/precise
-# Try: 0.20 (very fast) | 0.30 (default) | 0.50 (balanced) | 1.00 (surgical)
-sweep_seconds = 0.30
+[AbletonOSC by ideoforms](https://github.com/ideoforms/AbletonOSC) — install in Ableton's `Remote Scripts` folder. Default ports `11000` (recv) / `11001` (send) match FX Machine.
 
-# 1.0 = pure linear | 1.2 = slight ease at start | 2.0 = quadratic
-curve_exp = 1.0
+### 2. Create two specifically-named tracks
 
-# 0.30 = heavily smoothed (laggy but stable)
-# 0.55 = balanced (default)
-# 1.00 = raw input (can feel twitchy)
-smoothing_factor = 0.55
+**`~ FX Macros`** — Audio track or Return with an Audio Effect Rack containing these 8 macros (names must match exactly):
 
-# How far stick must move before any change registers.
-dead_zone = 0.18
-```
+`Filter Freq`, `Filter Mode`, `Filter Res`, `Stutter`, `Reverb Size`, `FX Send`, `Delay FB`, `Width`
 
-Save, press `SELECT + START` in the app, immediately feel the change. No code editing, no restart, no compilation.
+The rack must follow the [nested wet/dry topology](#-the-signal-chain-djm-900-style) — Auto Filter and Beat Repeat on the main path, then a wet/dry sub-rack containing Utility → Dark Hall → Long Digi Delay, then a final Utility for Width.
+
+**`~ EQ Macros`** — Audio track or Return with an Audio Effect Rack containing 3 macros mapped to an EQ Three:
+
+- `EQ Low` → GainLow
+- `EQ Mid` → GainMid
+- `EQ High` → GainHi
+
+### 3. Optional prefix conventions
+
+- Scenes prefixed with **`§`** become bookmarks (jump targets via D-pad)
+- Tracks prefixed with **`*`** become group lead tracks (group navigation via D-pad)
+
+---
+
+## 🎮 Full Controller Map
+
+### Navigation Layer (default)
+
+| Input | Action |
+|---|---|
+| L-stick X / Y | Track / Scene navigation (hold to auto-scroll) |
+| D-pad ↑ / ↓ | Bookmark prev/next |
+| D-pad ← / → | Group prev/next |
+| ✕ | Launch clip |
+| ○ | Stop clip |
+| △ | Launch scene |
+| □ | Arm track |
+| L2 | Stop track |
+| R2 (hold) | Safety gate (prevents accidental launches) |
+| START | Play/stop transport |
+| R3 | Toggle EQ mode |
+
+### FX Mode (hold L1)
+
+| Input | Action |
+|---|---|
+| L-stick Y | Filter Freq (with acceleration) |
+| L-stick X | Filter Res |
+| R-stick | FX Send + Reverb Size |
+| D-pad ↑ / ↓ | Bookmark prev/next |
+| D-pad ← / → | Delay FB step (1/20 of range) |
+| L1 + ✕ | 💥 STUTTER (momentary) |
+| L1 + ○ | 🔻 BASS CUT (momentary, snapshot restore) |
+| L1 + △ | Launch scene |
+| L1 + □ | 🌫 FX SEND THROW (momentary, snapshot restore) |
+| L1 + L3 | Toggle filter lock |
+| L1 + R3 | Toggle wet lock |
+
+### EQ Mode (tap R3 to enter / exit)
+
+| Input | Action |
+|---|---|
+| R-stick X (hold) | Encoder: right = boost, left = cut, release = HOLD |
+| R-stick Y ↑↑ | Switch band up (wraps MID → HIGH → LOW → MID) |
+| R-stick Y ↓↓ | Switch band down (wraps MID → LOW → HIGH → MID) |
+| R-stick X ←← | Smart kill / normalize |
+| R-stick X →→ | Smart restore / boost (bass blocked at ≥ 0 dB) |
+
+### Modifier Combos (hold SELECT)
+
+| Input | Action |
+|---|---|
+| SELECT + R-stick Y | Track volume control |
+| SELECT + R3 | Volume mute toggle (single tap = unity, double tap = mute) |
+| SELECT + R1 | Save FX baseline |
+| SELECT + START | Full refresh (TOML reload + Ableton session refresh + controller reprobe) |
+
+---
+
+## 🔒 Safety Features
+
+Built for live performance, where errors are unacceptable.
+
+- **Bass boost cap** — encoder cannot push bass above +2 dB
+- **Bass double-flick boost blocked** — protects subs and listeners
+- **Delay feedback cap** — limited to 92% to prevent runaway feedback
+- **R2 safety gate** — prevents accidental clip/scene launches when held
+- **Lock states** — Filter and Wet can be locked against L1-release recovery
+- **FX baseline snapshot** — auto-captures startup values, restorable any time
+- **Pre-engage snapshots** — momentary effects restore exactly what was there before press
+- **Ghost-event reconciliation** — auto-recovers from dropped SELECT release events
+- **Controller auto-reprobe** — detects silent disconnects within 5 seconds
+- **Throttled OSC writes** — prevents Ableton flooding (25ms FX / 15ms EQ minimums)
+- **Epsilon culling** — skips writes when the value change is imperceptible
+- **TOML reload protection** — broken configs keep last working values, never crash the show
 
 ---
 
 ## 🏗️ Architecture
 
-A modular Python application with **5 concurrent daemon threads** coordinated through a thread-safe shared state:
+Modular Python app with **5 concurrent daemon threads** coordinated through a thread-safe shared state.
+
+<details>
+<summary><b>📖 Click for the architecture diagram</b></summary>
 
 ```
 ┌─ Main Thread ─────────────────────────────────┐
@@ -515,23 +543,27 @@ A modular Python application with **5 concurrent daemon threads** coordinated th
 └──────────────────────────────────────┘
 ```
 
-### Project Structure
+</details>
+
+### Project structure
 
 ```
 fxmachine/
 ├── run.py                      Entry point: python run.py
 ├── build.py                    PyInstaller .exe builder
-├── diagnose.py                 145+ automated health checks
+├── diagnose.py                 150+ automated health checks
+├── inspect_exe.py              Verify .exe bundling
+├── FX_Machine.spec             PyInstaller spec file
 ├── README.md                   This file
 ├── .gitignore
-├── config/
+├── config/                     TOML configuration system
 │   ├── default.toml            Factory template (don't edit)
 │   ├── active.toml             User settings (edit this)
 │   ├── EXAMPLES.toml           Preset snippets
 │   ├── README.md               Config folder explainer
 │   └── presets/                Saved user profiles
 ├── docs/
-│   └── screenshots/            UI screenshots embedded in README
+│   └── screenshots/            UI screenshots
 ├── logs/
 │   └── fxmachine.log           Rotating log file (auto-created)
 └── src/
@@ -544,7 +576,7 @@ fxmachine/
     │
     ├── osc/
     │   ├── client.py           Outbound OSC (all osc_* send functions)
-    │   ├── server.py           Inbound OSC (all on_* handlers + dispatcher)
+    │   ├── server.py           Inbound OSC (all on_* handlers)
     │   └── discovery.py        Session scanning + rack detection
     │
     ├── engine/
@@ -563,215 +595,28 @@ fxmachine/
     │
     └── ui/
         ├── palette.py          Colors + typography
-        ├── widgets.py          Canvas renderers (knob, meter, label cache)
+        ├── widgets.py          Canvas renderers
         ├── builder.py          Tkinter UI construction
         └── updater.py          UI update loop (40 Hz)
 ```
 
 ---
 
-## 🚀 Quick Start
-
-### Option A: Run from Python Source
-
-**Requirements:**
-- Windows 10 / 11
-- Python 3.12+ (3.11+ minimum for `tomllib`)
-- USB gamepad (PlayStation-style: 12 buttons, 2 analog sticks, D-pad)
-
-```bash
-# Install dependencies
-pip install pygame python-osc
-
-# Run
-python run.py
-```
-
-On first launch, the app creates `config/active.toml` automatically from `config/default.toml`.
-
-### Option B: Run the Standalone .exe
-
-No Python needed on the target machine. Just download/build the `.exe`:
-
-```bash
-# One-time build setup
-pip install pyinstaller
-
-# Build the .exe
-python build.py
-```
-
-The executable is created at `dist/FX_Machine.exe`. Double-click to run.
-
-The .exe is self-contained — TOML config, logs, and presets are created in `dist/config/`, `dist/logs/`, etc. next to the .exe.
-
-### Verify Setup
-
-Before your first session, run the diagnostic tool:
-
-```bash
-python diagnose.py
-```
-
-It runs 145+ health checks and reports any issues with your installation, dependencies, project structure, or Ableton connection.
-
----
-
-## 🎚️ Ableton Setup
-
-Your Ableton session needs:
-
-### 1. AbletonOSC Installed
-
-Install [AbletonOSC](https://github.com/ideoforms/AbletonOSC) in Ableton's `Remote Scripts` folder. Default ports `11000` (recv) / `11001` (send) — matches FX Machine defaults.
-
-### 2. Two Specifically-Named Tracks
-
-**`~ FX Macros`** — An audio track or Return track containing an Audio Effect Rack with these 8 macros (names must match exactly):
-
-- `Filter Freq` → Auto Filter frequency
-- `Filter Mode` → Auto Filter type (HP/LP)
-- `Filter Res` → Auto Filter resonance
-- `Stutter` → Beat Repeat on/off
-- `Reverb Size` → Dark Hall decay time
-- `FX Send` → Utility inside a nested wet/dry rack (controls wet chain gain)
-- `Delay FB` → Long Digi Delay feedback
-- `Width` → Utility stereo width
-
-The internal structure of this rack must follow the nested wet/dry topology described in the [Internal Wet/Dry Routing](#-internal-wetdry-routing--the-throw-and-tail-trick) section above. The dry chain must be empty (passthrough), and the wet chain contains the Utility (FX Send gain) → Dark Hall → Long Digi Delay in series.
-
-**`~ EQ Macros`** — An audio track or Return track containing an Audio Effect Rack with these 3 macros mapped to an EQ Three device:
-
-- `EQ Low` → GainLow
-- `EQ Mid` → GainMid
-- `EQ High` → GainHi
-
-### 3. Optional Prefix Conventions
-
-- Scenes prefixed with **`§`** become bookmarks (jump targets via D-pad)
-- Tracks prefixed with **`*`** become group lead tracks (group navigation via D-pad)
-
----
-
-## 🎮 Full Controller Map
-
-### Navigation Layer (Default)
-
-| Input | Action |
-|---|---|
-| L-stick Y | Scene navigation (hold to auto-scroll) |
-| L-stick X | Track navigation |
-| D-pad ↑ / ↓ | Bookmark prev/next |
-| D-pad ← / → | Group prev/next |
-| ✕ | Launch clip |
-| ○ | Stop clip |
-| △ | Launch scene |
-| □ | Arm track |
-| L2 | Stop track |
-| R2 (hold) | Safety gate (prevents accidental launches) |
-| START | Play/stop transport |
-| R3 | Toggle EQ mode |
-
-### FX Mode Layer (Hold L1)
-
-| Input | Action |
-|---|---|
-| L-stick Y | Filter Freq (with acceleration) |
-| L-stick X | Filter Res |
-| R-stick | FX Send + Reverb Size |
-| D-pad ↑ / ↓ | Bookmark prev/next |
-| D-pad ← / → | Delay FB step (1/20 of range) |
-| L1 + ✕ | 💥 STUTTER (momentary) |
-| L1 + ○ | 🔻 BASS CUT (momentary, snapshot restore) |
-| L1 + △ | Launch scene |
-| L1 + □ | 🌫 FX SEND THROW (momentary, snapshot restore) |
-| L1 + L3 | Toggle filter lock |
-| L1 + R3 | Toggle wet lock |
-
-### EQ Mode Layer (Tap R3 to enter, R3 again to exit)
-
-| Input | Action |
-|---|---|
-| R-stick X (hold) | Encoder: boost (right) / cut (left) — value HOLDS on release |
-| R-stick Y ↑↑ | Switch band up (MID → HIGH → LOW, no borders) |
-| R-stick Y ↓↓ | Switch band down (MID → LOW → HIGH, no borders) |
-| R-stick X ←← | Smart kill / normalize |
-| R-stick X →→ | Smart restore / boost (bass blocked at ≥ 0 dB) |
-
-### Modifier Combos (SELECT held)
-
-| Input | Action |
-|---|---|
-| SELECT + R-stick Y | Track volume control |
-| SELECT + R3 | Volume mute toggle (single = unity, double = mute) |
-| SELECT + R1 | Save FX baseline |
-| SELECT + START | Force full refresh (TOML config + Ableton + controller) |
-
----
-
-## 🔒 Safety Features
-
-This system is built for **live performance**, where errors are unacceptable. Several safety mechanisms are baked in:
-
-- **Bass boost cap** — encoder cannot push bass above +2 dB
-- **Bass double-flick boost blocked** — protects subs and listeners
-- **Delay feedback cap** — limited to 92% to prevent runaway feedback
-- **R2 safety gate** — prevents accidental clip/scene launches when held
-- **Lock states** — Filter and Wet can be locked to prevent FX recovery from changing them
-- **FX baseline snapshot** — auto-captures startup values, restorable any time
-- **Pre-engage snapshots** — momentary effects restore exactly what was there before press
-- **Ghost-event reconciliation** — auto-recovers from dropped SELECT button release events
-- **Controller auto-reprobe** — detects silent disconnects within 5 seconds and reconnects
-- **Throttled OSC writes** — prevents Ableton flooding (25ms FX / 15ms EQ minimums)
-- **Epsilon culling** — skips writes when the value change would be imperceptible
-- **TOML reload protection** — broken config files keep previous working values, no crash
-
----
-
-## 🪵 Logging
-
-FX Machine writes a rotating log file with timestamps to:
-
-- `logs/fxmachine.log` (when run from Python source)
-- `[exe_folder]/logs/fxmachine.log` (when run from `.exe`)
-
-Configuration:
-- **5 MB per file**
-- **10 rotated backups** (~55 MB total history)
-- **INFO level by default** (DEBUG available for deep diagnostics)
-- **Mirrors to console** during development
-- **Per-module loggers** for clean filtering
-- **Crash handler** logs uncaught exceptions before death
-- **Session start/end banners** for easy log navigation
-
-Example output:
-```
-22:47:13.124 [INFO ] fxmachine.osc.client            : OSC sender ready → 127.0.0.1:11000
-22:47:13.890 [INFO ] fxmachine.controller.watchdog   : Controller FOUND: DragonRise Inc.
-22:47:14.501 [INFO ] fxmachine.osc.discovery         : FX track found at index 12
-22:47:14.602 [INFO ] fxmachine.osc.discovery         : EQ track found at index 13
-22:47:15.001 [INFO ] fxmachine.engine.eq             : EQ band switched to High
-22:47:15.345 [WARN ] fxmachine.controller.watchdog   : SELECT ghost release detected — force-cleared
-22:48:01.789 [INFO ] fxmachine.config_loader         : Reload: EQ_SWEEP_SECONDS 0.3 → 0.5  [applied]
-```
-
----
-
 ## 🛠️ Development
 
-### Tech Stack
+### Tech stack
 
 - **Python 3.12** — language
 - **pygame 2.6** — gamepad input
-- **python-osc** — OSC communication
-- **tkinter** — UI (standard library, no extra install)
+- **python-osc** — OSC communication with Ableton
 - **tomllib** — TOML parsing (Python 3.11+ built-in)
+- **tkinter** — UI (standard library)
 - **PyInstaller** — `.exe` builder
 - **Git** — version control
 
-### Project Health Tool
+### Diagnostic tool
 
-A diagnostic script runs 145+ automated health checks on the entire codebase:
+A diagnostic script runs 150+ automated health checks on the entire codebase:
 
 ```bash
 python diagnose.py            # full check
@@ -779,69 +624,77 @@ python diagnose.py --quick    # skip slow tests (OSC, gamepad, git)
 python diagnose.py --verbose  # show every check, not just failures
 ```
 
-It validates:
+It validates Python version, dependencies, project structure, syntax across every `.py` file, all module imports, TOML config validity and key mappings, `cfg` singleton attribute coverage (catches broken `cfg.X` references at static-analysis time before runtime crashes), log folder writability, dead/unused imports, OSC port availability, gamepad detection, and git status.
 
-- Python version and dependencies
-- Project file structure
-- Syntax across every `.py` file
-- All module imports resolve
-- TOML config validity and key mappings
-- `cfg` singleton attribute coverage (catches broken `cfg.X` references at static-analysis time before runtime crashes)
-- Log folder writability
-- Dead/unused imports
-- OSC port availability
-- Gamepad detection and capability
-- Git status
+Exit codes: `0` = clean, `1` = warnings only, `2` = errors found. Run before every commit and before every show.
 
-Run it before every commit and before every show. Exit codes: `0` = clean, `1` = warnings only, `2` = errors found.
-
-### Architectural Constants vs Tunables
+### Architectural constants vs tunables
 
 The codebase distinguishes two kinds of constants:
 
-- **Architectural constants** (`src/config.py`) — facts about the system that never change at runtime. Button index numbers, OSC paths, the EQ neutral macro value calibrated empirically. These stay hardcoded.
+- **Architectural constants** (`src/config.py`) — facts about the system that never change at runtime. Button indices, OSC paths, the EQ neutral macro value calibrated empirically. These stay hardcoded.
 
-- **Tunable values** (`config/active.toml` via `src/config_loader.py`) — preferences that affect feel. Sweep speeds, deadzones, gesture timings. These are loaded from TOML and hot-reloadable.
+- **Tunable values** (`config/active.toml` via `src/config_loader.py`) — preferences that affect feel. Sweep speeds, deadzones, gesture timings. These load from TOML and are hot-reloadable.
 
-When adding new features, decide which category each new value belongs to. The `cfg` singleton makes the distinction explicit:
+The `cfg` singleton makes the distinction explicit at every call site:
 
 ```python
 from src.config import EQ_NEUTRAL_MACRO       # architectural — direct import
 from src.config_loader import cfg
 
-# Usage:
 if value > EQ_NEUTRAL_MACRO:                  # architectural constant
     delta = cfg.EQ_SWEEP_SECONDS * x          # tunable — always current
 ```
 
 After a hot-reload, `cfg.EQ_SWEEP_SECONDS` returns the new value immediately. The architectural import stays the same forever.
 
-### Adding a New Tunable Value
+### Adding a new tunable value
 
-When you want to add a new TOML-controllable value, you need to update **three places**:
+Three places need updating:
 
 1. **`config/default.toml`** — add the key in the appropriate `[section]` with a descriptive comment
-2. **`src/config_loader.py`** — add the attribute to `_RuntimeConfig.__init__()` and add the mapping to `_CFG_MAP`
+2. **`src/config_loader.py`** — add the attribute to `_RuntimeConfig.__init__()` and the mapping to `_CFG_MAP`
 3. **The module that uses it** — read via `cfg.YOUR_NEW_VALUE`
 
-The diagnostic tool's deep `cfg` reference check will catch missing additions at static-analysis time.
+The diagnostic tool's deep `cfg` reference check will catch missing additions at static-analysis time, before they crash at runtime.
+
+### Logging
+
+FX Machine writes a rotating log file with timestamps:
+
+- `logs/fxmachine.log` (script mode)
+- `[exe_folder]/logs/fxmachine.log` (.exe mode)
+
+5 MB per file, 10 rotated backups (~55 MB history). INFO level by default, DEBUG available. Per-module loggers, crash handler for uncaught exceptions, session start/end banners.
+
+Example output:
+```
+22:47:13.124 [INFO ] fxmachine.osc.client            : OSC sender ready → 127.0.0.1:11000
+22:47:13.890 [INFO ] fxmachine.controller.watchdog   : Controller FOUND: USB Gamepad
+22:47:14.501 [INFO ] fxmachine.osc.discovery         : FX track found at index 12
+22:47:15.001 [INFO ] fxmachine.engine.eq             : EQ band switched to High
+22:48:01.789 [INFO ] fxmachine.config_loader         : Reload: EQ_SWEEP_SECONDS 0.3 → 0.5  [applied]
+```
 
 ---
 
 ## 🗺️ Roadmap
 
-### Build B (In Progress)
-- 🎚️ **TRIM knob** — 4th EQ macro controlling Utility gain before EQ Three (DJM-style input trim, -∞ to +9 dB)
-- 📊 **Redesigned channel meter** — 15-segment vertical, -30 to +12 dB range, DJM-900 NXS2 visual style
-- 🚨 **CLIP indicator** — 2-stage warning (yellow→red color fade + flicker), TOML-configurable thresholds
-- 🔄 **Notification slot** — dedicated UI area for transient warnings (config errors, clipping, critical events)
+### Build B — in progress
 
-### Future Builds
+- 🎚️ **TRIM knob** — 4th EQ macro controlling a Utility gain device before the EQ Three (input trim, -∞ to +9 dB, DJM-900 NXS2 style)
+- 📊 **Redesigned channel meter** — 15-segment vertical, -30 to +12 dB range, color-zoned green→yellow→orange→red
+- 🚨 **CLIP indicator** — 2-stage warning (yellow warn + red critical) with smooth color fade and configurable flicker
+- 🔄 **Notification slot** — dedicated UI area for transient warnings (config errors, clipping, critical events)
+- 🖼️ **UI layout update** — matches DJM-900 NXS2 reference image
+
+### Future builds
+
 - ⏱️ **Tap tempo** — long-press START → tap 4 times → set BPM
-- 🥁 **Note repeat / clip roll** — Push-inspired tempo-synced auto-fire (hold L2+X for 1/16 stutter launches)
-- 🚨 **Panic reset** — L1+L3+R3 simultaneous = restore all FX + EQ to neutral
+- 🥁 **Note repeat / clip roll** — Push-inspired tempo-synced auto-fire
+- 🚨 **Panic reset** — L1+L3+R3 = restore all FX + EQ to neutral
 - 🎯 **Quantized bass cut release** — beat-synced auto-release at the next downbeat (the "Ben Böhmer move")
-- 🖥️ **Big touch overlay** — Push-inspired large value readout when actively adjusting
+- 🖥️ **Big touch overlay** — Push-inspired large value readout when adjusting
 - 🎛️ **Auto-map mode** — gamepad maps to currently selected device's first parameters
 - 💾 **Per-bookmark baselines** — different FX state per song section
 - 🔄 **State persistence** — pick up where you left off across restarts
@@ -876,9 +729,11 @@ You are NOT permitted to:
 
 **Ayoub Agoujdad**
 
-🎵 Artist alias: **[MIRA](https://instagram.com/MIRA___OFC)** (formerly half of **Mirymood** duo)
-🎛️ Project: **Modulated_OFC**
-🇲🇦 Based in Marrakech, Morocco
+🎵 Performing as **[MIRA](https://instagram.com/MIRA___OFC)** (formerly half of **Mirymood** duo)  
+🎛️ Project: **Modulated_OFC**  
+🇲🇦 Based in Marrakech, Morocco  
+
+Built out of necessity. I wanted a controller that felt like a DJM-900 in front of Ableton — without buying a DJM-900. Then I wanted my friends to be able to use it too, so I made it configurable. Then I wanted to ship it, so I made it a portable app.
 
 Made by and for live performance.
 
