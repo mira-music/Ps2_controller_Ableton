@@ -332,7 +332,7 @@ def eq_drive_continuous_encoder(stick_x, now):
 
     if (now - last_at) < EQ_WRITE_THROTTLE:
         return
-    if abs(new_val - last_val) < 0.3:
+    if abs(new_val - last_val) < 0.15:
         return
 
     with st._lock:
