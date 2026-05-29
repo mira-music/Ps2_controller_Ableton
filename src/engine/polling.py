@@ -7,6 +7,15 @@
                       safety polls, session size detection at ~6.6 Hz)
     eq_ramp_loop()  — animates EQ value changes for double-flick actions
                       at ~60 Hz with cubic ease-out
+
+  Tunable values from cfg:
+    cfg.QUERY_DEFER_TIME        [LIVE]    deferred query delay
+    cfg.FX_SAFETY_POLL_INTERVAL [LIVE]    safety re-query interval
+    cfg.EQ_RAMP_MIN_MS          [LIVE]    fastest ramp duration
+    cfg.EQ_RAMP_MAX_MS          [LIVE]    slowest ramp duration
+
+  Note: EQ_RAMP_TICK_MS is read once at thread start (used in time.sleep).
+        Changing it via TOML requires app restart.
 ================================================================================
 """
 
@@ -16,9 +25,10 @@ import threading
 
 from src import state as st
 from src.config import (
-    QUERY_DEFER_TIME, FX_SAFETY_POLL_INTERVAL,
-    EQ_RAMP_TICK_MS, EQ_RAMP_MIN_MS, EQ_RAMP_MAX_MS,
+    # Architectural constant — thread tick rate read once at startup
+    EQ_RAMP_TICK_MS,
 )
+from src.config_loader import cfg
 from src.helpers import clamp
 from src.osc.client import (
     osc_query_position, osc_query_fx_macro_values, osc_query_eq_macro_values,
@@ -41,6 +51,14 @@ _last_fx_safety_poll    = 0.0
 # ═══════════════════════════════════════════════════════════════════════════
 
 def polling_loop():
+    """
+    Background polling thread. Runs at ~6.6 Hz (150ms sleep).
+    Periodically queries Ableton for state that doesn't push via listeners.
+
+    Reads from cfg (hot-reloadable):
+      cfg.QUERY_DEFER_TIME        — debounce for position queries
+      cfg.FX_SAFETY_POLL_INTERVAL — re-sync FX/EQ values periodically
+    """
     global _last_known_track_count, _last_known_scene_count, _last_fx_safety_poll
     from src.osc.discovery import fetch_all_names
 
@@ -52,7 +70,7 @@ def polling_loop():
 
             with st._lock:
                 req = st.state["_query_requested_at"]
-            if req > 0 and (now - req) >= QUERY_DEFER_TIME:
+            if req > 0 and (now - req) >= cfg.QUERY_DEFER_TIME:
                 osc_query_position()
                 with st._lock:
                     st.state["_query_requested_at"] = 0.0
@@ -69,7 +87,7 @@ def polling_loop():
                 st.osc.send_message("/live/track/get/volume", [track])
                 time.sleep(0.02)
 
-            if now - _last_fx_safety_poll >= FX_SAFETY_POLL_INTERVAL:
+            if now - _last_fx_safety_poll >= cfg.FX_SAFETY_POLL_INTERVAL:
                 with st._lock:
                     fx_idx = st.state["fx_track_index"]
                     eq_idx = st.state["eq_track_index"]
@@ -112,7 +130,12 @@ def polling_loop():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def eq_ramp_loop():
-    """Dedicated thread for EQ ramp animation at ~60 Hz."""
+    """
+    Dedicated thread for EQ ramp animation at ~60 Hz.
+
+    Note: EQ_RAMP_TICK_MS is read ONCE at thread start. Changing it via
+    TOML requires app restart (which is why it's marked [RESTART]).
+    """
     tick_interval = EQ_RAMP_TICK_MS / 1000.0
 
     while True:
@@ -166,13 +189,17 @@ def start_eq_ramp(slot, target_val, flick_duration_s):
     """
     Start an animated ramp for an EQ band.
     Duration scales linearly with flick speed:
-      fast flick (30ms)  → 30ms ramp
-      slow flick (200ms) → 100ms ramp
+      fast flick (30ms)  → cfg.EQ_RAMP_MIN_MS ramp
+      slow flick (200ms) → cfg.EQ_RAMP_MAX_MS ramp
+
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_RAMP_MIN_MS
+      cfg.EQ_RAMP_MAX_MS
     """
     fd_ms = flick_duration_s * 1000.0
     fd_clamped = clamp(fd_ms, 30.0, 200.0)
     t = (fd_clamped - 30.0) / 170.0
-    ramp_ms = EQ_RAMP_MIN_MS + t * (EQ_RAMP_MAX_MS - EQ_RAMP_MIN_MS)
+    ramp_ms = cfg.EQ_RAMP_MIN_MS + t * (cfg.EQ_RAMP_MAX_MS - cfg.EQ_RAMP_MIN_MS)
     ramp_duration_s = ramp_ms / 1000.0
 
     with st._lock:

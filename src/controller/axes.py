@@ -15,7 +15,7 @@
     handle_axes_eq(ctrl, dt)
         Y axis → double-flick BAND navigation (with axis-dominance suppression)
         X axis → encoder VALUE control + double-flick value actions
-        Y gesture FREEZES X encoder until complete
+        Y gesture FREEZES X encoder until complete (and vice versa)
 
     handle_right_joystick_volume(ctrl)
         SELECT+R-stick Y → Ableton track volume control
@@ -23,6 +23,12 @@
     handle_dpad(ctrl)
         Nav layer: U/D bookmarks, L/R groups (with R2=force lead)
         FX layer:  U/D bookmarks, L/R Delay FB step
+
+  All tunable values read from cfg (hot-reloadable via SELECT+START):
+    cfg.ANALOG_THRESHOLD  cfg.HOLD_SCROLL_DELAY  cfg.HOLD_SCROLL_RATE
+    cfg.FX_AXIS_DEAD_ZONE
+    cfg.EQ_SMOOTHING_FACTOR  cfg.EQ_AXIS_DEAD_ZONE  cfg.EQ_DOMINANCE_RATIO
+    cfg.VOL_DEAD_ZONE  cfg.VOL_SENSITIVITY  cfg.VOL_CHANGE_THRESHOLD
 ================================================================================
 """
 
@@ -30,14 +36,13 @@ import time
 
 from src import state as st
 from src.config import (
+    # Architectural constants — axis indices, slot indices, hardware-defined
     AXIS_LEFT_X, AXIS_LEFT_Y, AXIS_RIGHT_X, AXIS_RIGHT_Y,
-    ANALOG_THRESHOLD, HOLD_SCROLL_DELAY, HOLD_SCROLL_RATE,
-    FX_AXIS_DEAD_ZONE,
     FX_SLOT_FILTER_FREQ, FX_SLOT_FILTER_RES, FX_SLOT_FX_SEND, FX_SLOT_REVERB_SIZE,
     RIGHT_STICK_ROTATED_90,
-    EQ_SMOOTHING_FACTOR, EQ_AXIS_DEAD_ZONE, EQ_DOMINANCE_RATIO,
-    VOL_DEAD_ZONE, VOL_SENSITIVITY, VOL_MIN, VOL_MAX, VOL_CHANGE_THRESHOLD,
+    VOL_MIN, VOL_MAX,
 )
+from src.config_loader import cfg
 from src.helpers import (
     smooth_axis, hybrid_curve, clamp, db_from_vol,
     compute_accel_multiplier,
@@ -57,6 +62,12 @@ from src.engine.eq import (
 # ═══════════════════════════════════════════════════════════════════════════
 
 def handle_axes_navigation(controller):
+    """
+    Reads from cfg (hot-reloadable):
+      cfg.ANALOG_THRESHOLD     — how far to push stick before scrolling triggers
+      cfg.HOLD_SCROLL_DELAY    — pause before auto-scroll starts
+      cfg.HOLD_SCROLL_RATE     — speed of auto-scroll once started
+    """
     now = time.perf_counter()
 
     st._smoothed_lx = smooth_axis(st._smoothed_lx, controller.get_axis(AXIS_LEFT_X))
@@ -64,7 +75,7 @@ def handle_axes_navigation(controller):
     lx = hybrid_curve(st._smoothed_lx)
     ly = hybrid_curve(st._smoothed_ly)
 
-    dir_x = 1 if lx > ANALOG_THRESHOLD else (-1 if lx < -ANALOG_THRESHOLD else 0)
+    dir_x = 1 if lx > cfg.ANALOG_THRESHOLD else (-1 if lx < -cfg.ANALOG_THRESHOLD else 0)
     with st._lock:
         last_dir_x    = st.state["_lx_last_dir"]
         held_since_x  = st.state["_lx_held_since"]
@@ -78,13 +89,13 @@ def handle_axes_navigation(controller):
         if dir_x != 0:
             navigate_track(dir_x)
     elif dir_x != 0:
-        if (now - held_since_x  >= HOLD_SCROLL_DELAY and
-                now - last_repeat_x >= HOLD_SCROLL_RATE):
+        if (now - held_since_x  >= cfg.HOLD_SCROLL_DELAY and
+                now - last_repeat_x >= cfg.HOLD_SCROLL_RATE):
             navigate_track(dir_x)
             with st._lock:
                 st.state["_lx_last_repeat"] = now
 
-    dir_y = 1 if ly > ANALOG_THRESHOLD else (-1 if ly < -ANALOG_THRESHOLD else 0)
+    dir_y = 1 if ly > cfg.ANALOG_THRESHOLD else (-1 if ly < -cfg.ANALOG_THRESHOLD else 0)
     with st._lock:
         last_dir_y    = st.state["_ly_last_dir"]
         held_since_y  = st.state["_ly_held_since"]
@@ -98,8 +109,8 @@ def handle_axes_navigation(controller):
         if dir_y != 0:
             navigate_scene(dir_y)
     elif dir_y != 0:
-        if (now - held_since_y  >= HOLD_SCROLL_DELAY and
-                now - last_repeat_y >= HOLD_SCROLL_RATE):
+        if (now - held_since_y  >= cfg.HOLD_SCROLL_DELAY and
+                now - last_repeat_y >= cfg.HOLD_SCROLL_RATE):
             navigate_scene(dir_y)
             with st._lock:
                 st.state["_ly_last_repeat"] = now
@@ -109,6 +120,10 @@ def handle_axes_navigation(controller):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def handle_axes_fx(controller, dt):
+    """
+    Reads from cfg (hot-reloadable):
+      cfg.FX_AXIS_DEAD_ZONE — stick deadzone for FX layer
+    """
     now = time.perf_counter()
 
     raw_lx = controller.get_axis(AXIS_LEFT_X)
@@ -129,24 +144,24 @@ def handle_axes_fx(controller, dt):
     if RIGHT_STICK_ROTATED_90:
         fx_send_input    = -rx
         reverb_size_input = ry
-        fx_send_dir = 1 if fx_send_input > FX_AXIS_DEAD_ZONE else \
-                      (-1 if fx_send_input < -FX_AXIS_DEAD_ZONE else 0)
-        rev_size_dir = 1 if reverb_size_input > FX_AXIS_DEAD_ZONE else \
-                       (-1 if reverb_size_input < -FX_AXIS_DEAD_ZONE else 0)
+        fx_send_dir = 1 if fx_send_input > cfg.FX_AXIS_DEAD_ZONE else \
+                      (-1 if fx_send_input < -cfg.FX_AXIS_DEAD_ZONE else 0)
+        rev_size_dir = 1 if reverb_size_input > cfg.FX_AXIS_DEAD_ZONE else \
+                       (-1 if reverb_size_input < -cfg.FX_AXIS_DEAD_ZONE else 0)
         accel_fxsend  = compute_accel_multiplier("rx", fx_send_dir, now)
         accel_revsize = compute_accel_multiplier("ry", rev_size_dir, now)
     else:
         fx_send_input    = -ry
         reverb_size_input = rx
-        fx_send_dir = 1 if fx_send_input > FX_AXIS_DEAD_ZONE else \
-                      (-1 if fx_send_input < -FX_AXIS_DEAD_ZONE else 0)
-        rev_size_dir = 1 if reverb_size_input > FX_AXIS_DEAD_ZONE else \
-                       (-1 if reverb_size_input < -FX_AXIS_DEAD_ZONE else 0)
+        fx_send_dir = 1 if fx_send_input > cfg.FX_AXIS_DEAD_ZONE else \
+                      (-1 if fx_send_input < -cfg.FX_AXIS_DEAD_ZONE else 0)
+        rev_size_dir = 1 if reverb_size_input > cfg.FX_AXIS_DEAD_ZONE else \
+                       (-1 if reverb_size_input < -cfg.FX_AXIS_DEAD_ZONE else 0)
         accel_fxsend  = compute_accel_multiplier("ry", fx_send_dir, now)
         accel_revsize = compute_accel_multiplier("rx", rev_size_dir, now)
 
-    lx_dir = 1 if lx > FX_AXIS_DEAD_ZONE else (-1 if lx < -FX_AXIS_DEAD_ZONE else 0)
-    ly_dir = 1 if ly > FX_AXIS_DEAD_ZONE else (-1 if ly < -FX_AXIS_DEAD_ZONE else 0)
+    lx_dir = 1 if lx > cfg.FX_AXIS_DEAD_ZONE else (-1 if lx < -cfg.FX_AXIS_DEAD_ZONE else 0)
+    ly_dir = 1 if ly > cfg.FX_AXIS_DEAD_ZONE else (-1 if ly < -cfg.FX_AXIS_DEAD_ZONE else 0)
     accel_lx = compute_accel_multiplier("lx", lx_dir, now)
     accel_ly = compute_accel_multiplier("ly", ly_dir, now)
 
@@ -161,9 +176,9 @@ def handle_axes_fx(controller, dt):
 
 def handle_axes_eq(controller, dt):
     """
-    v9.11 — EQ mode axis handling.
+    EQ mode axis handling.
 
-    Y axis (up/down): DOUBLE-FLICK to switch band (mirrors X gesture pattern)
+    Y axis (up/down): DOUBLE-FLICK to switch band
                       UP   → next band up (HIGH direction, wraps)
                       DOWN → next band down (LOW direction, wraps)
     X axis (left/right): ENCODER (continuous value control) + double-flick actions
@@ -172,18 +187,22 @@ def handle_axes_eq(controller, dt):
                          RIGHT 2x   → restore/boost-15%
                          LEFT  2x   → kill/normalize
 
-    Y gesture FREEZES X encoder during the entire double-flick window.
-    Axis dominance suppression prevents accidental cross-axis triggers.
+    Mutual exclusion: each axis freezes the other during gesture detection.
 
-    Right stick is physically rotated 90°.
+    Right stick is physically rotated 90° (see RIGHT_STICK_ROTATED_90).
+
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_SMOOTHING_FACTOR
+      cfg.EQ_AXIS_DEAD_ZONE
+      cfg.EQ_DOMINANCE_RATIO
     """
     now = time.perf_counter()
 
     raw_rx = controller.get_axis(AXIS_RIGHT_X)
     raw_ry = controller.get_axis(AXIS_RIGHT_Y)
 
-    st._smoothed_eq_rx = smooth_axis(st._smoothed_eq_rx, raw_rx, factor=EQ_SMOOTHING_FACTOR)
-    st._smoothed_eq_ry = smooth_axis(st._smoothed_eq_ry, raw_ry, factor=EQ_SMOOTHING_FACTOR)
+    st._smoothed_eq_rx = smooth_axis(st._smoothed_eq_rx, raw_rx, factor=cfg.EQ_SMOOTHING_FACTOR)
+    st._smoothed_eq_ry = smooth_axis(st._smoothed_eq_ry, raw_ry, factor=cfg.EQ_SMOOTHING_FACTOR)
 
     rx_curved = hybrid_curve(st._smoothed_eq_rx)
     ry_curved = hybrid_curve(st._smoothed_eq_ry)
@@ -202,8 +221,8 @@ def handle_axes_eq(controller, dt):
     y_in_gesture = update_eq_y_gesture_v911(eq_y_input, now)
 
     # ── STEP 2: Y dominance suppression ────────────────────────────────
-    y_dominates = (abs_y > EQ_AXIS_DEAD_ZONE and
-                   abs_y > abs_x * EQ_DOMINANCE_RATIO)
+    y_dominates = (abs_y > cfg.EQ_AXIS_DEAD_ZONE and
+                   abs_y > abs_x * cfg.EQ_DOMINANCE_RATIO)
 
     if y_in_gesture or y_dominates:
         # Y owns the stick — freeze X completely
@@ -234,6 +253,14 @@ def handle_axes_eq(controller, dt):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def handle_right_joystick_volume(controller):
+    """
+    SELECT modifier + R-stick Y = track volume control.
+
+    Reads from cfg (hot-reloadable):
+      cfg.VOL_DEAD_ZONE         — stick deadzone for volume
+      cfg.VOL_SENSITIVITY       — how much volume changes per stick movement
+      cfg.VOL_CHANGE_THRESHOLD  — minimum change worth sending to Ableton
+    """
     with st._lock:
         if not st.state["select_held"]:
             return
@@ -242,10 +269,10 @@ def handle_right_joystick_volume(controller):
     ry  = hybrid_curve(st._smoothed_ry)
     now = time.perf_counter()
 
-    if abs(ry) < VOL_DEAD_ZONE:
+    if abs(ry) < cfg.VOL_DEAD_ZONE:
         return
 
-    delta = -ry * VOL_SENSITIVITY
+    delta = -ry * cfg.VOL_SENSITIVITY
     should_send = False
 
     with st._lock:
@@ -254,7 +281,7 @@ def handle_right_joystick_volume(controller):
             return
         st.ableton["track_volume"] = new_vol
         if (now - st.state["_vol_last_sent"] > 0.02 and
-                abs(new_vol - st.state["_vol_last_value"]) > VOL_CHANGE_THRESHOLD):
+                abs(new_vol - st.state["_vol_last_value"]) > cfg.VOL_CHANGE_THRESHOLD):
             st.state["_vol_last_sent"]  = now
             st.state["_vol_last_value"] = new_vol
             should_send = True

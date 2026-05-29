@@ -607,6 +607,12 @@ watchdog_interval = 1.0
 # [LIVE] After this many seconds of no input, perform health check (seconds).
 idle_reprobe_after = 5.0
 
+# [LIVE] How often to check for "ghost" SELECT button-up events that
+# pygame sometimes drops (seconds). Lower = catches faster but more CPU.
+#   0.05 = very responsive
+#   0.10 = balanced (current default)
+#   0.30 = lazy, fine if you rarely use SELECT combos
+select_reconcile_interval = 0.10
 
 
 # =============================================================================

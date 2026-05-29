@@ -12,21 +12,19 @@ import time
 
 from src import state as st
 from src.config import (
-    ABLETON_UNITY,
-    SMOOTHING_FACTOR,
-    FX_ACCEL_RAMP_S, FX_ACCEL_MAX_MULT,
-    EQ_AXIS_DEAD_ZONE, EQ_SWEEP_SECONDS, EQ_ENCODER_CURVE_EXP,
+    # Architectural constants — never change at runtime
     EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_NEUTRAL_MACRO,
 )
-
+from src.config_loader import cfg
 # ═══════════════════════════════════════════════════════════════════════════
 #  BASIC HELPERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def db_from_vol(vol):
+    """Convert Ableton's normalized volume (0-1) to dB string for display."""
     if vol <= 0:
         return "-∞ dB"
-    db = 20 * math.log10(vol / ABLETON_UNITY)
+    db = 20 * math.log10(vol / cfg.ABLETON_UNITY)
     return f"{db:+.1f} dB"
 
 def clamp(val, lo, hi):
@@ -51,7 +49,12 @@ def hybrid_curve(value):
     return (abs(value) ** 1.8) * (1.0 if value > 0 else -1.0)
 
 def smooth_axis(previous, current, factor=None):
-    f = factor if factor is not None else SMOOTHING_FACTOR
+    """
+    Exponential smoothing on raw axis input.
+    Default factor comes from cfg.SMOOTHING_FACTOR (hot-reloadable).
+    Callers can override with a per-call factor (e.g. EQ uses its own).
+    """
+    f = factor if factor is not None else cfg.SMOOTHING_FACTOR
     return previous * (1.0 - f) + current * f
 
 def mark_controller_input():
@@ -80,6 +83,14 @@ def reset_accel_state():
             st.state["_accel_last_dir"][k] = 0
 
 def compute_accel_multiplier(axis_key, current_dir, now):
+    """
+    Time-based acceleration multiplier for FX stick driving.
+    Holding the stick in one direction → speed ramps up over time.
+    
+    Reads from cfg (hot-reloadable):
+      cfg.FX_ACCEL_RAMP_S
+      cfg.FX_ACCEL_MAX_MULT
+    """
     with st._lock:
         last_dir = st.state["_accel_last_dir"][axis_key]
         since    = st.state["_accel_since"][axis_key]
@@ -96,8 +107,8 @@ def compute_accel_multiplier(axis_key, current_dir, now):
 
         elapsed = now - since
 
-    mult = 1.0 + (elapsed / FX_ACCEL_RAMP_S)
-    return min(mult, FX_ACCEL_MAX_MULT)
+    mult = 1.0 + (elapsed / cfg.FX_ACCEL_RAMP_S)
+    return min(mult, cfg.FX_ACCEL_MAX_MULT)
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  EQ HELPERS
@@ -117,15 +128,19 @@ def eq_visual_position(macro_value):
 def eq_encoder_delta(stick_value, dt):
     """
     Convert stick deflection + frame dt → signed macro value delta.
-    Curve: see EQ_ENCODER_CURVE_EXP (1.2 = slight start easing).
+    
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_AXIS_DEAD_ZONE
+      cfg.EQ_ENCODER_CURVE_EXP
+      cfg.EQ_SWEEP_SECONDS
     """
     abs_v = abs(stick_value)
-    if abs_v < EQ_AXIS_DEAD_ZONE:
+    if abs_v < cfg.EQ_AXIS_DEAD_ZONE:
         return 0.0
-    normalized = (abs_v - EQ_AXIS_DEAD_ZONE) / (1.0 - EQ_AXIS_DEAD_ZONE)
+    normalized = (abs_v - cfg.EQ_AXIS_DEAD_ZONE) / (1.0 - cfg.EQ_AXIS_DEAD_ZONE)
     normalized = clamp(normalized, 0.0, 1.0)
-    shaped = normalized ** EQ_ENCODER_CURVE_EXP
+    shaped = normalized ** cfg.EQ_ENCODER_CURVE_EXP
     macro_range = EQ_MACRO_MAX - EQ_MACRO_MIN
-    velocity = (macro_range / EQ_SWEEP_SECONDS) * shaped
+    velocity = (macro_range / cfg.EQ_SWEEP_SECONDS) * shaped
     sign = 1.0 if stick_value > 0 else -1.0
     return velocity * sign * dt

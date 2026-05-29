@@ -7,13 +7,16 @@
     - acquire lock, compute new position, set state, schedule queries
     - flash UI on boundary errors
     - send OSC update on success
+
+  All tunable values read from cfg (hot-reloadable via SELECT+START):
+    cfg.DPAD_DEBOUNCE   — minimum time between D-pad presses
 ================================================================================
 """
 
 import time
 
 from src import state as st
-from src.config import DPAD_DEBOUNCE
+from src.config_loader import cfg
 from src.helpers import flash, clamp
 from src.osc.client import (
     osc_update_view, schedule_position_query, osc_query_group_previews,
@@ -83,9 +86,13 @@ def navigate_track(direction):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def navigate_bookmark(direction):
+    """
+    Reads from cfg (hot-reloadable):
+      cfg.DPAD_DEBOUNCE — minimum time between D-pad presses
+    """
     now = time.perf_counter()
     with st._lock:
-        if now - st.state["_last_dpad_v"] < DPAD_DEBOUNCE:
+        if now - st.state["_last_dpad_v"] < cfg.DPAD_DEBOUNCE:
             return
         st.state["_last_dpad_v"] = now
         bmarks   = st.state["bookmarks"]
@@ -138,9 +145,13 @@ def navigate_bookmark(direction):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def navigate_track_group(direction, force_lead=False):
+    """
+    Reads from cfg (hot-reloadable):
+      cfg.DPAD_DEBOUNCE — minimum time between D-pad presses
+    """
     now = time.perf_counter()
     with st._lock:
-        if now - st.state["_last_dpad_h"] < DPAD_DEBOUNCE:
+        if now - st.state["_last_dpad_h"] < cfg.DPAD_DEBOUNCE:
             return
         st.state["_last_dpad_h"] = now
         groups   = st.state["groups"]

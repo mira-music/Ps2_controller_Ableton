@@ -21,7 +21,6 @@ from src.config import (
     EQ_METER_PEAK_HOLD_S, EQ_METER_PEAK_FALL,
     EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_NEUTRAL_MACRO,
 )
-from src.helpers import clamp
 from src.ui.palette import (
     ABL_DIVIDER, ABL_YELLOW, ABL_RED,
     ABL_CELL_MOMENT, ABL_CELL_LOCK, ABL_CELL_HOT,

@@ -25,7 +25,7 @@
 
 **FX Machine** transforms a generic USB gamepad into a precision instrument for live electronic music performance. It bridges a PlayStation-style controller to Ableton Live via OSC, exposing two parallel effect racks — a 3-band kill EQ and an 8-macro FX rack — that you can manipulate with **encoder-style sticks**, **double-flick gestures**, and **momentary button effects**.
 
-This isn't a MIDI mapping. It's a custom-built performance system with its own gesture language, safety logic, and visual feedback layer.
+This isn't a MIDI mapping. It's a custom-built performance system with its own gesture language, safety logic, visual feedback layer, and **hot-reloadable TOML config** so you can tune feel on the fly without restarting.
 
 ```
        Gamepad ──── USB ──── FX Machine ──── OSC ──── Ableton Live
@@ -230,7 +230,7 @@ A 24-segment vertical LED meter beside the EQ stack shows **real-time audio outp
 
 <div align="center">
 
-![Main UI](docs/screenshots/screenshot-main.png)
+![Main UI](docs/screenshots/fx_machine_ui_v_9_11.png)
 
 </div>
 
@@ -264,7 +264,7 @@ Where:
 - `sweep_seconds = 0.3` — time to sweep the full range at full deflection
 - `curve_exp = 1.0` — pure linear response (proportional to stick position)
 
-Tuning these values changes the feel dramatically. A higher `curve_exp` (1.3+) adds easing near rest (precise tweaks), while `1.0` gives instant proportional response (aggressive, performer-friendly).
+Tuning these values changes the feel dramatically. A higher `curve_exp` (1.3+) adds easing near rest (precise tweaks), while `1.0` gives instant proportional response (aggressive, performer-friendly). All values are hot-reloadable via the TOML config — see [Configuration](#️-configuration) below.
 
 ### Why 0 dB Isn't in the Middle of the Macro Range
 
@@ -343,6 +343,132 @@ If Y is more than 3× larger than X, Y wins entirely. Conversely, once an X gest
 
 ---
 
+## ⚙️ Configuration
+
+FX Machine ships with a powerful TOML-based configuration system that lets you tune every aspect of the controller's feel **without editing any code**. Changes can be applied while the app is running — no restart required for most settings.
+
+### Where Config Lives
+
+```
+config/
+├── default.toml           Factory template (do not edit — your safety net)
+├── active.toml            Your current settings (this is what the app reads)
+├── EXAMPLES.toml          Ready-to-copy preset snippets
+├── README.md              Explainer for the folder
+└── presets/               Your saved profiles
+```
+
+On first launch, the app automatically creates `active.toml` by copying `default.toml`. You edit `active.toml` going forward.
+
+### How to Tune
+
+1. Open `config/active.toml` in any text editor (Notepad++, VS Code, etc.)
+2. Read the comments — every value is explained in plain English with recommended ranges
+3. Change a number and save
+4. In the FX Machine app, press **`SELECT + START`** on your controller (or click the **`⟳ REFRESH`** button)
+5. Your changes apply instantly
+
+If you write invalid TOML, the app warns you on reload and **keeps the previous working values** — your show is never broken.
+
+### Hot-Reloadable vs Restart-Required
+
+Most values reload instantly (marked `[LIVE]` in the comments). A few system-level settings need a full app restart (marked `[RESTART]`):
+
+- UI refresh rate
+- Window size
+- OSC network ports
+- EQ ramp animation tick rate
+
+When you reload and a `[RESTART]` value has changed, the app tells you in the status bar:
+```
+🔄 ✓ Config reload — 0 applied, ⚠ 1 need restart
+```
+
+### Tunable Categories
+
+The TOML file is organized into logical sections, each controlling a feature area:
+
+| Section | Controls |
+|---|---|
+| `[eq.encoder]` | EQ stick sweep speed, curve shape, smoothing, deadzone |
+| `[eq.dominance]` | How decisive Y vs X must be in EQ mode |
+| `[eq.flick]` | Double-flick gesture timing thresholds |
+| `[eq.detent]` | Sticky 0 dB feel near unity |
+| `[eq.osc]` | OSC message throttling for EQ |
+| `[eq.ramp]` | Animation duration for kill/normalize/boost actions |
+| `[eq.safety]` | Bass boost cap, boost percentage per flick |
+| `[trim]` | TRIM knob feel (sweep, curve, max gain) — Build B |
+| `[meter]` | Channel meter reference offset, ballistics, peak hold |
+| `[meter.clip]` | CLIP indicator thresholds and flicker behavior — Build B |
+| `[fx]` | Per-macro sweep speeds, deadzone, acceleration |
+| `[fx.delay_fb]` | Delay feedback discrete-stepping behavior |
+| `[volume]` | SELECT+R-stick volume control sensitivity |
+| `[navigation]` | Track/scene scrolling responsiveness |
+| `[timing]` | Internal timing for polling, watchdog, debouncing |
+| `[ui]` | UI refresh rate, window geometry (restart required) |
+| `[network]` | OSC host and ports (restart required) |
+
+### Ready-Made Presets
+
+Five preset snippets ship in `config/EXAMPLES.toml`:
+
+- **PUNCHY CLUB** — aggressive, fast, decisive (for live drops)
+- **STUDIO PRECISE** — slow, surgical, fine-grained (for mixing)
+- **BEGINNER FORGIVING** — easy controls, hard to make mistakes
+- **RADIO/STREAM SAFE** — strict gain control, paranoid metering
+- **VINTAGE ANALOG FEEL** — slow, springy, mechanical detent
+
+To use a preset, copy the relevant TOML sections from `EXAMPLES.toml` into your `active.toml`, save, and reload. Mix and match — encoder settings from one preset, meter settings from another, etc.
+
+### Saving Your Own Presets
+
+Once `active.toml` feels great:
+
+1. Copy `active.toml` to `presets/` and rename (e.g., `presets/my_club_set.toml`)
+2. To recall later: copy any preset back to `active.toml` and reload
+
+Send `.toml` files to other producers to share your tuning — they drop them in their `config/` folder and they get your exact feel.
+
+### Resetting to Defaults
+
+If you ever want a fresh start:
+
+```bash
+# Windows
+del config\active.toml
+python run.py
+```
+
+The app recreates `active.toml` from `default.toml` automatically.
+
+### Example: Tuning the EQ Encoder
+
+Edit `config/active.toml`:
+
+```toml
+[eq.encoder]
+
+# Time in seconds to sweep across the FULL EQ range at maximum stick push.
+# Lower = faster/aggressive, Higher = slower/precise
+# Try: 0.20 (very fast) | 0.30 (default) | 0.50 (balanced) | 1.00 (surgical)
+sweep_seconds = 0.30
+
+# 1.0 = pure linear | 1.2 = slight ease at start | 2.0 = quadratic
+curve_exp = 1.0
+
+# 0.30 = heavily smoothed (laggy but stable)
+# 0.55 = balanced (default)
+# 1.00 = raw input (can feel twitchy)
+smoothing_factor = 0.55
+
+# How far stick must move before any change registers.
+dead_zone = 0.18
+```
+
+Save, press `SELECT + START` in the app, immediately feel the change. No code editing, no restart, no compilation.
+
+---
+
 ## 🏗️ Architecture
 
 A modular Python application with **5 concurrent daemon threads** coordinated through a thread-safe shared state:
@@ -395,12 +521,22 @@ A modular Python application with **5 concurrent daemon threads** coordinated th
 fxmachine/
 ├── run.py                      Entry point: python run.py
 ├── build.py                    PyInstaller .exe builder
+├── diagnose.py                 145+ automated health checks
 ├── README.md                   This file
 ├── .gitignore
+├── config/
+│   ├── default.toml            Factory template (don't edit)
+│   ├── active.toml             User settings (edit this)
+│   ├── EXAMPLES.toml           Preset snippets
+│   ├── README.md               Config folder explainer
+│   └── presets/                Saved user profiles
 ├── docs/
 │   └── screenshots/            UI screenshots embedded in README
+├── logs/
+│   └── fxmachine.log           Rotating log file (auto-created)
 └── src/
-    ├── config.py               All constants (timings, deadzones, curves)
+    ├── config.py               Architectural constants (don't change at runtime)
+    ├── config_loader.py        TOML loader + cfg singleton + hot-reload
     ├── state.py                Shared state + thread locks
     ├── helpers.py              Math, formatting, smoothing
     ├── log_setup.py            Centralized logging system
@@ -440,7 +576,7 @@ fxmachine/
 
 **Requirements:**
 - Windows 10 / 11
-- Python 3.12+
+- Python 3.12+ (3.11+ minimum for `tomllib`)
 - USB gamepad (PlayStation-style: 12 buttons, 2 analog sticks, D-pad)
 
 ```bash
@@ -450,6 +586,8 @@ pip install pygame python-osc
 # Run
 python run.py
 ```
+
+On first launch, the app creates `config/active.toml` automatically from `config/default.toml`.
 
 ### Option B: Run the Standalone .exe
 
@@ -464,6 +602,18 @@ python build.py
 ```
 
 The executable is created at `dist/FX_Machine.exe`. Double-click to run.
+
+The .exe is self-contained — TOML config, logs, and presets are created in `dist/config/`, `dist/logs/`, etc. next to the .exe.
+
+### Verify Setup
+
+Before your first session, run the diagnostic tool:
+
+```bash
+python diagnose.py
+```
+
+It runs 145+ health checks and reports any issues with your installation, dependencies, project structure, or Ableton connection.
 
 ---
 
@@ -555,7 +705,7 @@ The internal structure of this rack must follow the nested wet/dry topology desc
 | SELECT + R-stick Y | Track volume control |
 | SELECT + R3 | Volume mute toggle (single = unity, double = mute) |
 | SELECT + R1 | Save FX baseline |
-| SELECT + START | Force full refresh (Ableton + controller) |
+| SELECT + START | Force full refresh (TOML config + Ableton + controller) |
 
 ---
 
@@ -574,6 +724,7 @@ This system is built for **live performance**, where errors are unacceptable. Se
 - **Controller auto-reprobe** — detects silent disconnects within 5 seconds and reconnects
 - **Throttled OSC writes** — prevents Ableton flooding (25ms FX / 15ms EQ minimums)
 - **Epsilon culling** — skips writes when the value change would be imperceptible
+- **TOML reload protection** — broken config files keep previous working values, no crash
 
 ---
 
@@ -601,6 +752,7 @@ Example output:
 22:47:14.602 [INFO ] fxmachine.osc.discovery         : EQ track found at index 13
 22:47:15.001 [INFO ] fxmachine.engine.eq             : EQ band switched to High
 22:47:15.345 [WARN ] fxmachine.controller.watchdog   : SELECT ghost release detected — force-cleared
+22:48:01.789 [INFO ] fxmachine.config_loader         : Reload: EQ_SWEEP_SECONDS 0.3 → 0.5  [applied]
 ```
 
 ---
@@ -613,46 +765,78 @@ Example output:
 - **pygame 2.6** — gamepad input
 - **python-osc** — OSC communication
 - **tkinter** — UI (standard library, no extra install)
+- **tomllib** — TOML parsing (Python 3.11+ built-in)
 - **PyInstaller** — `.exe` builder
 - **Git** — version control
 
-### Tunable Constants
+### Project Health Tool
 
-All performance-critical values live in `src/config.py`. Common knobs to turn:
+A diagnostic script runs 145+ automated health checks on the entire codebase:
+
+```bash
+python diagnose.py            # full check
+python diagnose.py --quick    # skip slow tests (OSC, gamepad, git)
+python diagnose.py --verbose  # show every check, not just failures
+```
+
+It validates:
+
+- Python version and dependencies
+- Project file structure
+- Syntax across every `.py` file
+- All module imports resolve
+- TOML config validity and key mappings
+- `cfg` singleton attribute coverage (catches broken `cfg.X` references at static-analysis time before runtime crashes)
+- Log folder writability
+- Dead/unused imports
+- OSC port availability
+- Gamepad detection and capability
+- Git status
+
+Run it before every commit and before every show. Exit codes: `0` = clean, `1` = warnings only, `2` = errors found.
+
+### Architectural Constants vs Tunables
+
+The codebase distinguishes two kinds of constants:
+
+- **Architectural constants** (`src/config.py`) — facts about the system that never change at runtime. Button index numbers, OSC paths, the EQ neutral macro value calibrated empirically. These stay hardcoded.
+
+- **Tunable values** (`config/active.toml` via `src/config_loader.py`) — preferences that affect feel. Sweep speeds, deadzones, gesture timings. These are loaded from TOML and hot-reloadable.
+
+When adding new features, decide which category each new value belongs to. The `cfg` singleton makes the distinction explicit:
 
 ```python
-# EQ encoder feel
-EQ_SWEEP_SECONDS      = 0.30    # full-range sweep time at max deflection
-EQ_ENCODER_CURVE_EXP  = 1.0     # 1.0 = linear, higher = more easing at start
-EQ_SMOOTHING_FACTOR   = 0.55    # axis smoothing (higher = snappier)
-EQ_AXIS_DEAD_ZONE     = 0.18    # ignore tiny stick movements
+from src.config import EQ_NEUTRAL_MACRO       # architectural — direct import
+from src.config_loader import cfg
 
-# Axis separation
-EQ_DOMINANCE_RATIO    = 3.0     # |Y| > |X| * this → Y wins, suppress X
-
-# Double-flick gesture timing
-EQ_FLICK_EXTREME      = 0.90    # deflection to register "flicked"
-EQ_FLICK_RETURN       = 0.22    # threshold to register "returned"
-EQ_FLICK_TIMEOUT_MS   = 380     # window between flicks
-
-# Sticky 0 dB detent
-EQ_DETENT_RANGE       = 1.0     # macro units around neutral for slowdown
-EQ_DETENT_MIN_FACTOR  = 0.30    # min speed multiplier at exact neutral
-
-# Animation
-EQ_RAMP_MIN_MS        = 30      # fastest ramp (fast flick)
-EQ_RAMP_MAX_MS        = 100     # slowest ramp (slow flick)
-
-# Safety
-EQ_BASS_BOOST_CAP     = 114.0   # bass encoder upper limit (+2 dB)
+# Usage:
+if value > EQ_NEUTRAL_MACRO:                  # architectural constant
+    delta = cfg.EQ_SWEEP_SECONDS * x          # tunable — always current
 ```
+
+After a hot-reload, `cfg.EQ_SWEEP_SECONDS` returns the new value immediately. The architectural import stays the same forever.
+
+### Adding a New Tunable Value
+
+When you want to add a new TOML-controllable value, you need to update **three places**:
+
+1. **`config/default.toml`** — add the key in the appropriate `[section]` with a descriptive comment
+2. **`src/config_loader.py`** — add the attribute to `_RuntimeConfig.__init__()` and add the mapping to `_CFG_MAP`
+3. **The module that uses it** — read via `cfg.YOUR_NEW_VALUE`
+
+The diagnostic tool's deep `cfg` reference check will catch missing additions at static-analysis time.
 
 ---
 
 ## 🗺️ Roadmap
 
-Features under consideration:
+### Build B (In Progress)
+- 🎚️ **TRIM knob** — 4th EQ macro controlling Utility gain before EQ Three (DJM-style input trim, -∞ to +9 dB)
+- 📊 **Redesigned channel meter** — 15-segment vertical, -30 to +12 dB range, DJM-900 NXS2 visual style
+- 🚨 **CLIP indicator** — 2-stage warning (yellow→red color fade + flicker), TOML-configurable thresholds
+- 🔄 **Notification slot** — dedicated UI area for transient warnings (config errors, clipping, critical events)
 
+### Future Builds
 - ⏱️ **Tap tempo** — long-press START → tap 4 times → set BPM
 - 🥁 **Note repeat / clip roll** — Push-inspired tempo-synced auto-fire (hold L2+X for 1/16 stutter launches)
 - 🚨 **Panic reset** — L1+L3+R3 simultaneous = restore all FX + EQ to neutral
@@ -660,7 +844,6 @@ Features under consideration:
 - 🖥️ **Big touch overlay** — Push-inspired large value readout when actively adjusting
 - 🎛️ **Auto-map mode** — gamepad maps to currently selected device's first parameters
 - 💾 **Per-bookmark baselines** — different FX state per song section
-- ⚙️ **TOML config file** — tune feel without editing code
 - 🔄 **State persistence** — pick up where you left off across restarts
 - 🎵 **MIDI clock output** — FX Machine as master clock for external hardware
 - 🧪 **Unit tests** — automated gesture engine validation
@@ -693,8 +876,8 @@ You are NOT permitted to:
 
 **Ayoub Agoujdad**
 
-🎵 Artist alias: **[MIRA](https://instagram.com/MIRA___OFC)** (formerly half of **Mirymood** duo)  
-🎛️ Project: **Modulated_OFC**  
+🎵 Artist alias: **[MIRA](https://instagram.com/MIRA___OFC)** (formerly half of **Mirymood** duo)
+🎛️ Project: **Modulated_OFC**
 🇲🇦 Based in Marrakech, Morocco
 
 Made by and for live performance.

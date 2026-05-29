@@ -4,6 +4,10 @@
 ================================================================================
   Button-triggered actions. Pure side-effect functions that update
   state and dispatch OSC. No input handling — that's controller.buttons.
+
+  All tunable values read from cfg (hot-reloadable via SELECT+START):
+    cfg.R3_DOUBLE_CLICK_WINDOW  — window for double-click mute on SELECT+R3
+    cfg.ABLETON_UNITY           — Ableton's unity-gain volume position
 ================================================================================
 """
 
@@ -12,10 +16,11 @@ import threading
 
 from src import state as st
 from src.config import (
-    R3_DOUBLE_CLICK_WINDOW, ABLETON_UNITY,
+    # Architectural constants — never change at runtime
     FX_RECOVERY_BEHAVIOUR, FX_SLOT_FX_SEND, FX_SEND_DRY_VALUE,
     FX_RECOVERY_FLASH_S,
 )
+from src.config_loader import cfg
 from src.osc.client import (
     osc_launch_clip, osc_stop_clip, osc_stop_track, osc_launch_scene,
     osc_arm_track, osc_play, osc_stop, osc_set_volume, osc_set_fx_macro,
@@ -80,25 +85,31 @@ def action_transport_toggle():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def action_volume_mute_toggle():
-    """SELECT+R3 = volume mute toggle. Single click resets to unity,
-    double click within 400ms mutes."""
+    """
+    SELECT+R3 = volume mute toggle. Single click resets to unity,
+    double click within window mutes.
+
+    Reads from cfg (hot-reloadable):
+      cfg.R3_DOUBLE_CLICK_WINDOW
+      cfg.ABLETON_UNITY
+    """
     now = time.perf_counter()
     with st._lock:
         last = st.state["_r3_last_click"]
-        if (now - last) <= R3_DOUBLE_CLICK_WINDOW and last > 0:
+        if (now - last) <= cfg.R3_DOUBLE_CLICK_WINDOW and last > 0:
             st.ableton["track_volume"] = 0.0
             st.state["last_action"]    = "🔇 Muted  (SELECT+R3 once to reset)"
             st.state["_r3_last_click"] = 0.0
             vol = 0.0
         else:
-            st.ableton["track_volume"] = ABLETON_UNITY
+            st.ableton["track_volume"] = cfg.ABLETON_UNITY
             st.state["last_action"]    = "↺  Volume reset  0 dB"
             st.state["_r3_last_click"] = now
-            vol = ABLETON_UNITY
+            vol = cfg.ABLETON_UNITY
     osc_set_volume(vol)
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  FORCE REFRESH (SELECT+START)
+#  FORCE REFRESH (SELECT+START or ⟳ REFRESH button)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def action_force_refresh():

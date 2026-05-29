@@ -2,13 +2,19 @@
 ================================================================================
   src/engine/eq.py — EQ Mode Engine
 ================================================================================
-  Full EQ control system for v9.11:
+  Full EQ control system:
     - Mode toggle (R3 in nav layer)
-    - Band selection with wrap-around
+    - Band selection with wrap-around (3 bands)
     - Smart kill/normalize (double-flick X LEFT)
     - Smart restore/boost (double-flick X RIGHT)
     - Band navigation via double-flick Y (no borders)
     - Continuous encoder on X with sticky 0 dB detent
+
+  All tunable values read from cfg (hot-reloadable via SELECT+START):
+    cfg.EQ_FLICK_TIMEOUT_MS, cfg.EQ_FLICK_EXTREME, cfg.EQ_FLICK_RETURN
+    cfg.EQ_AXIS_DEAD_ZONE, cfg.EQ_WRITE_THROTTLE, cfg.EQ_WRITE_EPSILON
+    cfg.EQ_DETENT_RANGE, cfg.EQ_DETENT_MIN_FACTOR
+    cfg.EQ_BASS_BOOST_CAP, cfg.EQ_BOOST_PCT
 ================================================================================
 """
 
@@ -16,14 +22,12 @@ import time
 
 from src import state as st
 from src.config import (
+    # Architectural constants — never change at runtime
     EQ_NEUTRAL_MACRO, EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_CUT_HALF_MACRO,
-    EQ_BOOST_PCT, EQ_BASS_BOOST_CAP,
-    EQ_SLOT_LOW, EQ_SLOT_MID, EQ_SLOT_HIGH,
+    EQ_SLOT_LOW,
     EQ_MACRO_NAMES_EXPECTED,
-    EQ_AXIS_DEAD_ZONE, EQ_WRITE_THROTTLE,
-    EQ_DETENT_RANGE, EQ_DETENT_MIN_FACTOR,
-    EQ_FLICK_EXTREME, EQ_FLICK_RETURN, EQ_FLICK_TIMEOUT_MS,
 )
+from src.config_loader import cfg
 from src.helpers import clamp, eq_encoder_delta
 from src.osc.client import osc_set_eq_macro
 from src.engine.polling import start_eq_ramp
@@ -77,7 +81,7 @@ def eq_arm_band(direction):
         cur = st.state["eq_selected_band"]
         armed = (cur + direction) % 3
         st.state["eq_armed_band"]  = armed
-        st.state["eq_armed_until"] = time.perf_counter() + (EQ_FLICK_TIMEOUT_MS / 1000.0)
+        st.state["eq_armed_until"] = time.perf_counter() + (cfg.EQ_FLICK_TIMEOUT_MS / 1000.0)
         band_name = EQ_MACRO_NAMES_EXPECTED[armed]
         st.state["last_action"] = f"◇ → {band_name} armed (flick again)"
 
@@ -115,7 +119,7 @@ def eq_action_boost_or_restore(band, flick_duration_s):
     """
     Double-flick RIGHT — SMART restore/boost.
       - If value < 0 dB → restore to 0 dB
-      - If value ≥ 0 dB + Mid/High → +15% of remaining headroom
+      - If value ≥ 0 dB + Mid/High → +N% of remaining headroom (cfg.EQ_BOOST_PCT)
       - If value ≥ 0 dB + LOW (bass) → BLOCKED (safety)
     """
     with st._lock:
@@ -131,7 +135,7 @@ def eq_action_boost_or_restore(band, flick_duration_s):
             st.state["last_action"] = "🚫 Bass boost blocked (use stick for safe +2 dB)"
     else:
         remaining = EQ_MACRO_MAX - current
-        boost = remaining * EQ_BOOST_PCT
+        boost = remaining * cfg.EQ_BOOST_PCT
         target = clamp(current + boost, EQ_NEUTRAL_MACRO, EQ_MACRO_MAX)
         start_eq_ramp(band, target, flick_duration_s)
         with st._lock:
@@ -143,9 +147,14 @@ def eq_action_boost_or_restore(band, flick_duration_s):
 
 def update_eq_x_gesture(stick_x, now):
     """
-    v9.11 — X axis double-flick detection for VALUE actions.
+    X axis double-flick detection for VALUE actions.
     LEFT  → eq_action_kill (smart: normalize if above 0 dB, kill if at/below)
     RIGHT → eq_action_boost_or_restore
+
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_FLICK_TIMEOUT_MS
+      cfg.EQ_FLICK_EXTREME
+      cfg.EQ_FLICK_RETURN
 
     Returns True if gesture in progress (caller pauses encoder).
     """
@@ -154,13 +163,13 @@ def update_eq_x_gesture(stick_x, now):
         gesture_dir   = st.state["_eq_flick_x_dir"]
         gesture_time  = st.state["_eq_flick_x_time"]
         selected_band = st.state["eq_selected_band"]
-        timeout_s     = EQ_FLICK_TIMEOUT_MS / 1000.0
+        timeout_s     = cfg.EQ_FLICK_TIMEOUT_MS / 1000.0
 
     abs_x = abs(stick_x)
     dir_x = 1 if stick_x > 0 else (-1 if stick_x < 0 else 0)
 
     if gesture_state == "idle":
-        if abs_x >= EQ_FLICK_EXTREME:
+        if abs_x >= cfg.EQ_FLICK_EXTREME:
             with st._lock:
                 st.state["_eq_flick_x_state"] = "flicked"
                 st.state["_eq_flick_x_dir"]   = dir_x
@@ -174,7 +183,7 @@ def update_eq_x_gesture(stick_x, now):
             return True
 
     elif gesture_state == "flicked":
-        if abs_x < EQ_FLICK_RETURN:
+        if abs_x < cfg.EQ_FLICK_RETURN:
             with st._lock:
                 st.state["_eq_flick_x_state"] = "returned"
                 st.state["_eq_flick_x_returned_time"] = now
@@ -189,7 +198,7 @@ def update_eq_x_gesture(stick_x, now):
         return True
 
     elif gesture_state == "returned":
-        if abs_x >= EQ_FLICK_EXTREME and dir_x == gesture_dir:
+        if abs_x >= cfg.EQ_FLICK_EXTREME and dir_x == gesture_dir:
             flick_duration = now - gesture_time
             if gesture_dir < 0:
                 eq_action_kill(selected_band, flick_duration)
@@ -217,10 +226,15 @@ def update_eq_x_gesture(stick_x, now):
 
 def update_eq_y_gesture_v911(stick_y, now):
     """
-    v9.11 — Y axis double-flick BAND NAVIGATION.
+    Y axis double-flick BAND NAVIGATION.
 
     UP (positive Y)   → next band UP    (MID→HIGH→LOW→MID loop)
     DOWN (negative Y) → next band DOWN  (MID→LOW→HIGH→MID loop)
+
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_FLICK_TIMEOUT_MS
+      cfg.EQ_FLICK_EXTREME
+      cfg.EQ_FLICK_RETURN
 
     Returns True if gesture in progress (caller freezes X encoder).
     """
@@ -229,13 +243,13 @@ def update_eq_y_gesture_v911(stick_y, now):
         gesture_dir   = st.state["_eq_flick_y_dir"]
         gesture_time  = st.state["_eq_flick_y_time"]
         selected_band = st.state["eq_selected_band"]
-        timeout_s     = EQ_FLICK_TIMEOUT_MS / 1000.0
+        timeout_s     = cfg.EQ_FLICK_TIMEOUT_MS / 1000.0
 
     abs_y = abs(stick_y)
     dir_y = 1 if stick_y > 0 else (-1 if stick_y < 0 else 0)
 
     if gesture_state == "idle":
-        if abs_y >= EQ_FLICK_EXTREME:
+        if abs_y >= cfg.EQ_FLICK_EXTREME:
             target_band = (selected_band + dir_y) % 3
             with st._lock:
                 st.state["_eq_flick_y_state"] = "flicked"
@@ -250,7 +264,7 @@ def update_eq_y_gesture_v911(stick_y, now):
             return True
 
     elif gesture_state == "flicked":
-        if abs_y < EQ_FLICK_RETURN:
+        if abs_y < cfg.EQ_FLICK_RETURN:
             with st._lock:
                 st.state["_eq_flick_y_state"] = "returned"
                 st.state["_eq_flick_y_returned_time"] = now
@@ -265,7 +279,7 @@ def update_eq_y_gesture_v911(stick_y, now):
         return True
 
     elif gesture_state == "returned":
-        if abs_y >= EQ_FLICK_EXTREME and dir_y == gesture_dir:
+        if abs_y >= cfg.EQ_FLICK_EXTREME and dir_y == gesture_dir:
             eq_switch_band(gesture_dir)
             with st._lock:
                 st.state["_eq_flick_y_state"] = "idle"
@@ -292,6 +306,14 @@ def eq_drive_continuous_encoder(stick_x, now):
     Encoder-style EQ control via X axis.
     Right = boost, Left = cut, release = HOLD.
     Includes sticky 0 dB detent and bass safety cap.
+
+    Reads from cfg (hot-reloadable):
+      cfg.EQ_AXIS_DEAD_ZONE
+      cfg.EQ_DETENT_RANGE
+      cfg.EQ_DETENT_MIN_FACTOR
+      cfg.EQ_BASS_BOOST_CAP
+      cfg.EQ_WRITE_THROTTLE
+      cfg.EQ_WRITE_EPSILON
     """
     with st._lock:
         selected_band = st.state["eq_selected_band"]
@@ -310,7 +332,7 @@ def eq_drive_continuous_encoder(stick_x, now):
     with st._lock:
         st.state["_eq_encoder_last_tick"] = now
 
-    if abs(stick_x) < EQ_AXIS_DEAD_ZONE:
+    if abs(stick_x) < cfg.EQ_AXIS_DEAD_ZONE:
         return
     if dt <= 0.0:
         return
@@ -320,19 +342,19 @@ def eq_drive_continuous_encoder(stick_x, now):
         return
 
     distance_from_neutral = abs(current_val - EQ_NEUTRAL_MACRO)
-    if distance_from_neutral < EQ_DETENT_RANGE:
-        detent_factor = distance_from_neutral / EQ_DETENT_RANGE
-        delta *= max(EQ_DETENT_MIN_FACTOR, detent_factor)
+    if distance_from_neutral < cfg.EQ_DETENT_RANGE:
+        detent_factor = distance_from_neutral / cfg.EQ_DETENT_RANGE
+        delta *= max(cfg.EQ_DETENT_MIN_FACTOR, detent_factor)
 
     new_val = current_val + delta
 
     is_bass = (selected_band == EQ_SLOT_LOW)
-    upper_cap = EQ_BASS_BOOST_CAP if is_bass else EQ_MACRO_MAX
+    upper_cap = cfg.EQ_BASS_BOOST_CAP if is_bass else EQ_MACRO_MAX
     new_val = clamp(new_val, EQ_MACRO_MIN, upper_cap)
 
-    if (now - last_at) < EQ_WRITE_THROTTLE:
+    if (now - last_at) < cfg.EQ_WRITE_THROTTLE:
         return
-    if abs(new_val - last_val) < 0.15:
+    if abs(new_val - last_val) < cfg.EQ_WRITE_EPSILON:
         return
 
     with st._lock:
