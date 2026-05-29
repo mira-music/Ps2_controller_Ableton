@@ -116,6 +116,93 @@ else (current_value ≥ 0 dB):
 | **L1 + □** | 🌫 FX SEND THROW (jam to max while held, restores snapshot on release) |
 | **L1 + △** | ▶▶ Launch scene |
 
+#### 🔀 Internal Wet/Dry Routing — The "Throw and Tail" Trick
+
+The FX rack isn't a simple serial chain. It uses a **nested wet/dry rack** so that turning off the FX Send doesn't kill the reverb and delay tails — they ring out naturally, exactly like a real DJ mixer's send/return loop.
+
+```
+Audio Effect Rack (~ FX Macros)
+│
+├── Auto Filter           ← always on the main path (Filter Freq + Mode + Res)
+├── Beat Repeat           ← always on the main path (Stutter macro)
+│
+├── ┌─[ Nested Wet/Dry Rack ]──────────────────────┐
+│   │                                              │
+│   ├── Chain "Dry"  ─────────▶ passes through     │
+│   │   (empty — direct signal continues)          │
+│   │                                              │
+│   └── Chain "Wet"                                │
+│       ├── Utility    ◀── FX Send macro (gain)   │
+│       ├── Dark Hall  ◀── Reverb Size macro      │
+│       └── Long Digi Delay ◀── Delay FB macro    │
+│                                                  │
+└── └──────────────────────────────────────────────┘
+│
+└── Utility               ← Width macro (stereo width)
+```
+
+##### Why This Matters
+
+If FX Send were a simple "wet mix" knob in series with the reverb/delay, dropping it to 0 would **cut everything dry too**. That's not how a real DJ mixer works. On a Pioneer DJM-900, the send/return loop has two key properties:
+
+1. **The dry signal always passes through**, regardless of send amount
+2. **When you stop sending to the FX, the existing reverb/delay tails continue to decay naturally**
+
+This design replicates both behaviors:
+
+| FX Send macro value | Behavior |
+|---|---|
+| **100% (max)** | Full signal feeds into the wet chain → maximum reverb + delay |
+| **50%** | Half signal feeds in → moderate wet tails |
+| **0% (off)** | Nothing new enters the wet chain, BUT the **reverb decay continues** and the **delay buffer keeps feeding back** until they fade naturally |
+
+##### The "Throw and Let It Tail" Technique
+
+This routing is what enables the throw-and-tail move used in melodic house/techno:
+
+```
+1. Crank FX Send to max (L1+□ throw)        → big wet swell on the next 1-2 bars
+2. Release the throw button                  → FX Send snaps back to 0
+3. The dry signal continues clean            → but the tail keeps ringing
+4. Reverb decays for 30+ seconds             → ambient atmosphere
+5. Delay feedback continues bouncing         → rhythmic echoes
+```
+
+You can stack multiple throws to build up a wall of tails, then **kill the bass + drop a fresh element** — the tails carry the energy while the new sound establishes itself. Classic Ben Böhmer / Yotto / Nora En Pure move.
+
+##### Inner vs Outer Chain Macro Assignment
+
+| Macro | Path | Effect on signal |
+|---|---|---|
+| Filter Freq | Outer (main) | Affects everything — dry AND wet |
+| Filter Mode | Outer (main) | Affects everything — dry AND wet |
+| Filter Res | Outer (main) | Affects everything — dry AND wet |
+| Stutter | Outer (main) | Affects everything — dry AND wet |
+| **FX Send** | **Inner (gain into wet chain)** | **Controls how much new signal feeds the FX** |
+| Reverb Size | Inner (wet chain) | Adjusts reverb decay time |
+| Delay FB | Inner (wet chain) | Adjusts delay feedback amount |
+| Width | Outer (final) | Stereo widening on the entire output |
+
+This means **you can filter or stutter the wet tails** by sweeping Filter Freq or hitting STUTTER — the outer effects process the combined dry+wet output. Powerful for transitions where you sweep down the cutoff while letting reverb tails ring through, then re-open the filter on the drop.
+
+##### Recovery Behavior on L1 Release
+
+When you release L1 (exit FX mode), the recovery system honors this routing:
+
+- **Filter Freq** → restored to baseline (unless filter-locked via L1+L3)
+- **FX Send** → snapped to 0 (unless wet-locked via L1+R3)
+- **Stutter** → snapped to 0 always
+- **Reverb Size, Delay FB** → left untouched (the tails keep their character)
+
+So a typical performance flow is:
+
+1. Hold L1 (enter FX mode, view jumps to ~ FX Macros)
+2. Sweep filter down, push FX Send to 50%, push Delay FB to 70%
+3. Release L1 → Filter snaps back to neutral, FX Send drops to 0, **but the wet tails keep ringing with the delay rhythm you set**
+4. The track is now back to dry with ambient washing over it
+
+This is why **lock states matter** — if you want to keep FX Send at 50% across releases (for a wet bath effect), toggle wet-lock with L1+R3 before releasing L1.
+
 ### 📊 DJM-Style Channel Meter
 
 A 24-segment vertical LED meter beside the EQ stack shows **real-time audio output level** from the EQ track, with:
@@ -174,10 +261,10 @@ delta = (macro_range / sweep_seconds) × (stick_deflection ^ curve_exp)
 ```
 
 Where:
-- `sweep_seconds = 0.6` — time to sweep the full range at full deflection
-- `curve_exp = 1.2` — slight ease at the start, mostly linear after
+- `sweep_seconds = 0.3` — time to sweep the full range at full deflection
+- `curve_exp = 1.0` — pure linear response (proportional to stick position)
 
-Result: at 50% stick, you move at ~43% of max speed. At 100%, you move at 100%. The curve is gentle enough that precise edits feel natural, but full deflection still sweeps the whole range in under a second.
+Tuning these values changes the feel dramatically. A higher `curve_exp` (1.3+) adds easing near rest (precise tweaks), while `1.0` gives instant proportional response (aggressive, performer-friendly).
 
 ### Why 0 dB Isn't in the Middle of the Macro Range
 
@@ -199,12 +286,12 @@ The encoder works in **macro units per second**, not stick-position-to-dB mappin
 
 ### Sticky 0 dB Detent
 
-When the encoder is **near neutral** (within ±3 macro units of 0 dB), it slows down to 15% speed. This mimics the tactile detent on real EQ knobs at noon, making it easy to "find" 0 dB without overshooting.
+When the encoder is **near neutral** (within ±1 macro unit of 0 dB), it slows down to 30% speed. This mimics the tactile detent on real EQ knobs at noon, making it easy to "find" 0 dB without overshooting — without becoming a wall that fights against intentional sweeps.
 
 ```python
 distance = abs(current_value - 107.9)
-if distance < 3.0:
-    detent_factor = max(0.15, distance / 3.0)
+if distance < 1.0:
+    detent_factor = max(0.30, distance / 1.0)
     delta *= detent_factor
 ```
 
@@ -215,12 +302,12 @@ A double-flick is a state machine:
 ```
        extreme         center         extreme
   idle ────────▶ flicked ─────▶ returned ─────▶ confirmed
-  ◀───────── timeout (500ms) ─────────────────▶ reset
+  ◀───────── timeout (380ms) ─────────────────▶ reset
 ```
 
-- **EQ_FLICK_EXTREME = 0.85** — stick must reach 85% deflection to count as "flicked"
-- **EQ_FLICK_RETURN = 0.30** — must drop below 30% to count as "returned"
-- **EQ_FLICK_TIMEOUT_MS = 500** — second flick must arrive within 500ms
+- **EQ_FLICK_EXTREME = 0.90** — stick must reach 90% deflection to count as "flicked"
+- **EQ_FLICK_RETURN = 0.22** — must drop below 22% to count as "returned"
+- **EQ_FLICK_TIMEOUT_MS = 380** — second flick must arrive within 380ms
 
 Same direction required for second flick. Different direction or timeout → silent reset.
 
@@ -236,17 +323,23 @@ current_value = start + (target - start) * eased
 
 Why cubic ease-out: linear ramps sound abrupt at the end. Exponential ramps (`1 - e^-3x`) sound too slow at the start. Cubic ease-out is musically natural and click-free.
 
-### Axis Dominance Suppression
+### Axis Dominance Suppression (Mutual Exclusion)
 
-The right stick is one physical input controlling two logical things (X = value, Y = band switch). To prevent accidental cross-axis triggers when diagonal motion happens:
+The right stick is one physical input controlling two logical things (X = value, Y = band switch). To prevent accidental cross-axis triggers when diagonal motion happens, both axes use **strict mutual exclusion**:
 
 ```python
-if abs(y) > abs(x) * 1.3:
-    # Y dominates → suppress X completely
-    skip_x_processing()
+# Y dominance check
+if abs(y) > abs(x) * 3.0:
+    # Y dominates → suppress X completely, reset X gesture state
+    return
+
+# X gesture freezes Y while in progress
+if x_in_gesture:
+    reset_y_gesture_state()
+    return
 ```
 
-If Y is more than 30% larger than X, Y wins and X is ignored entirely. This makes band-switch flicks feel decisive without polluting the EQ value.
+If Y is more than 3× larger than X, Y wins entirely. Conversely, once an X gesture has started (extreme deflection detected), Y is frozen until the X gesture either completes or times out. This bidirectional protection prevents diagonal flicks from firing both a band switch AND a value action by accident.
 
 ---
 
@@ -391,9 +484,11 @@ Install [AbletonOSC](https://github.com/ideoforms/AbletonOSC) in Ableton's `Remo
 - `Filter Res` → Auto Filter resonance
 - `Stutter` → Beat Repeat on/off
 - `Reverb Size` → Dark Hall decay time
-- `FX Send` → Utility (inside nested wet/dry chain)
+- `FX Send` → Utility inside a nested wet/dry rack (controls wet chain gain)
 - `Delay FB` → Long Digi Delay feedback
 - `Width` → Utility stereo width
+
+The internal structure of this rack must follow the nested wet/dry topology described in the [Internal Wet/Dry Routing](#-internal-wetdry-routing--the-throw-and-tail-trick) section above. The dry chain must be empty (passthrough), and the wet chain contains the Utility (FX Send gain) → Dark Hall → Long Digi Delay in series.
 
 **`~ EQ Macros`** — An audio track or Return track containing an Audio Effect Rack with these 3 macros mapped to an EQ Three device:
 
@@ -477,7 +572,7 @@ This system is built for **live performance**, where errors are unacceptable. Se
 - **Pre-engage snapshots** — momentary effects restore exactly what was there before press
 - **Ghost-event reconciliation** — auto-recovers from dropped SELECT button release events
 - **Controller auto-reprobe** — detects silent disconnects within 5 seconds and reconnects
-- **Throttled OSC writes** — prevents Ableton flooding (25ms FX / 20ms EQ minimums)
+- **Throttled OSC writes** — prevents Ableton flooding (25ms FX / 15ms EQ minimums)
 - **Epsilon culling** — skips writes when the value change would be imperceptible
 
 ---
@@ -527,14 +622,22 @@ All performance-critical values live in `src/config.py`. Common knobs to turn:
 
 ```python
 # EQ encoder feel
-EQ_SWEEP_SECONDS      = 0.6     # full-range sweep time at max deflection
-EQ_ENCODER_CURVE_EXP  = 1.2     # 1.0 = linear, higher = more easing at start
+EQ_SWEEP_SECONDS      = 0.30    # full-range sweep time at max deflection
+EQ_ENCODER_CURVE_EXP  = 1.0     # 1.0 = linear, higher = more easing at start
+EQ_SMOOTHING_FACTOR   = 0.55    # axis smoothing (higher = snappier)
 EQ_AXIS_DEAD_ZONE     = 0.18    # ignore tiny stick movements
 
+# Axis separation
+EQ_DOMINANCE_RATIO    = 3.0     # |Y| > |X| * this → Y wins, suppress X
+
 # Double-flick gesture timing
-EQ_FLICK_TIMEOUT_MS   = 500     # window between flicks
-EQ_FLICK_EXTREME      = 0.85    # deflection to register "flicked"
-EQ_FLICK_RETURN       = 0.30    # threshold to register "returned"
+EQ_FLICK_EXTREME      = 0.90    # deflection to register "flicked"
+EQ_FLICK_RETURN       = 0.22    # threshold to register "returned"
+EQ_FLICK_TIMEOUT_MS   = 380     # window between flicks
+
+# Sticky 0 dB detent
+EQ_DETENT_RANGE       = 1.0     # macro units around neutral for slowdown
+EQ_DETENT_MIN_FACTOR  = 0.30    # min speed multiplier at exact neutral
 
 # Animation
 EQ_RAMP_MIN_MS        = 30      # fastest ramp (fast flick)
@@ -551,7 +654,11 @@ EQ_BASS_BOOST_CAP     = 114.0   # bass encoder upper limit (+2 dB)
 Features under consideration:
 
 - ⏱️ **Tap tempo** — long-press START → tap 4 times → set BPM
+- 🥁 **Note repeat / clip roll** — Push-inspired tempo-synced auto-fire (hold L2+X for 1/16 stutter launches)
 - 🚨 **Panic reset** — L1+L3+R3 simultaneous = restore all FX + EQ to neutral
+- 🎯 **Quantized bass cut release** — beat-synced auto-release at the next downbeat (the "Ben Böhmer move")
+- 🖥️ **Big touch overlay** — Push-inspired large value readout when actively adjusting
+- 🎛️ **Auto-map mode** — gamepad maps to currently selected device's first parameters
 - 💾 **Per-bookmark baselines** — different FX state per song section
 - ⚙️ **TOML config file** — tune feel without editing code
 - 🔄 **State persistence** — pick up where you left off across restarts
