@@ -63,7 +63,6 @@
 # Going above 2.00 will feel sluggish during a live drop.
 #
 sweep_seconds = 0.3
-
 # [LIVE] How the stick deflection translates to encoder speed.
 #
 # This is a mathematical curve. Think of it as "how the stick responds":
@@ -404,13 +403,13 @@ detent_min_factor = 0.30
 # DJ mixers display level relative to a NOMINAL "0 dB" mark, which is
 # typically -18 dBFS in digital. This offset shifts the display.
 #
-#   +12 = very hot reference (rarely shows red zone)
-#   +18 = broadcast/mastering standard (current default)
-#   +24 = quiet reference (everything looks loud)
+#   +6 = very hot reference (rarely shows red zone)
+#   +9 = broadcast/mastering standard (current default)
+#   +15 = quiet reference (everything looks loud)
 #
 # Lower this if your mixes show too much red, raise it if they show too little.
 #
-reference_offset_db = 18.0
+reference_offset_db = 9
 
 # [LIVE] How fast the meter falls back down after the signal drops (dB per second).
 #

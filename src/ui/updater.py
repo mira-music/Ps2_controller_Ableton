@@ -38,7 +38,9 @@ from src.ui.palette import (
 from src.ui.widgets import (
     set_label, draw_knob, draw_eq_knob, draw_channel_meter, update_meter_peak,
 )
+from src.log_setup import get_logger
 
+log = get_logger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 #  BLINK HELPER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -293,17 +295,68 @@ def update_ui(root, lbl):
         set_label(value_lbl, f"eq_value_{band_idx}",
                   value_str if value_str else "—", fg=label_color)
 
-    # ── DJM CHANNEL METER (real audio level + peak hold) ──
-    current_level = max(meter_left, meter_right)  # stereo peak
-    new_peak, new_peak_time = update_meter_peak(
-        current_level, meter_peak, meter_peak_time, now
+    # ── DJM CHANNEL METER (Build B Phase 2: new math + CLIP detection) ──
+    # Import the new meter functions
+    from src.ui.widgets import (
+        raw_meter_to_display_db, apply_meter_ballistics,
+        update_meter_peak_db, compute_clip_state,
     )
-    if new_peak != meter_peak or new_peak_time != meter_peak_time:
-        with st._lock:
-            st.state["eq_meter_peak"]      = new_peak
-            st.state["eq_meter_peak_time"] = new_peak_time
 
-    draw_channel_meter(lbl["eq_channel_meter"], current_level, new_peak)
+    current_level = max(meter_left, meter_right)  # stereo peak
+
+    # Convert raw 0-1 to display dB (-30 to +12 range)
+    current_display_db = raw_meter_to_display_db(current_level)
+
+    # Apply release ballistics (instant attack, slow decay)
+    with st._lock:
+        prev_smoothed = st.state["meter_smoothed_db"]
+    dt_meter = 1.0 / 40.0  # UI runs at ~40 Hz = 25ms per frame
+    smoothed_db = apply_meter_ballistics(current_display_db, prev_smoothed, dt_meter)
+
+    # Peak hold
+    with st._lock:
+        prev_peak_db = st.state["meter_peak_db"]
+        prev_peak_time = st.state["meter_peak_time"]
+    new_peak_db, new_peak_time = update_meter_peak_db(
+        smoothed_db, prev_peak_db, prev_peak_time, now
+    )
+
+    # CLIP detection
+    with st._lock:
+        was_clip_active = st.state["clip_active"]
+        clip_last_time = st.state["clip_last_active_time"]
+    clip_active, clip_level, clip_last_time = compute_clip_state(
+        smoothed_db, was_clip_active, clip_last_time, now
+    )
+
+    # Write all computed values back to state
+    with st._lock:
+        st.state["meter_display_db"]     = current_display_db
+        st.state["meter_smoothed_db"]    = smoothed_db
+        st.state["meter_peak_db"]        = new_peak_db
+        st.state["meter_peak_time"]      = new_peak_time
+        st.state["clip_active"]          = clip_active
+        st.state["clip_level"]           = clip_level
+        st.state["clip_last_active_time"] = clip_last_time
+        
+    # TEMPORARY DEBUG — remove after verifying Phase 2 math works (take off # # for debugging a good clipping calibre)
+    #if clip_active:
+        #log.warning(f"CLIP! level={clip_level:.2f} smoothed={smoothed_db:.1f}dB peak={new_peak_db:.1f}dB")
+
+    # For now, use the OLD meter drawing (Phase 4 will replace this)
+    # The old draw_channel_meter expects raw 0-1 values, not dB
+    old_peak = max(meter_left, meter_right)
+    with st._lock:
+        old_peak_val = st.state.get("eq_meter_peak", 0.0)
+        old_peak_time = st.state.get("eq_meter_peak_time", 0.0)
+    new_old_peak, new_old_peak_time = update_meter_peak(
+        old_peak, old_peak_val, old_peak_time, now
+    )
+    with st._lock:
+        st.state["eq_meter_peak"] = new_old_peak
+        st.state["eq_meter_peak_time"] = new_old_peak_time
+
+    draw_channel_meter(lbl["eq_channel_meter"], current_level, new_old_peak)
 
     # ── FX PANEL TITLE ──
     fx_color = int_to_hex_color(fx_track_color, ABL_TEXT)

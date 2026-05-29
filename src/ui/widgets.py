@@ -323,3 +323,309 @@ def update_meter_peak(current, last_peak, last_peak_time, now):
     if decayed < current:
         return current, now
     return max(decayed, 0.0), last_peak_time
+    
+# ═══════════════════════════════════════════════════════════════════════════
+#  BUILD B PHASE 2 — DJM-900 METER MATH + CLIP DETECTION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  New meter system: 15 segments from -30 dB to +12 dB (3 dB per segment)
+#  with CLIP indicator above. Replaces the old 24-segment system in Phase 4.
+#
+#  These functions compute values; they don't draw anything.
+#  The UI updater calls them every frame and stores results in state.
+#  The UI builder/drawer reads state to render.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import math as _math
+from src.config_loader import cfg as _cfg
+
+
+def raw_meter_to_display_db(raw_value):
+    """
+    Convert Ableton's raw meter output (0.0 to 1.0) to display dB.
+
+    Ableton's output_meter values are normalized peak levels:
+      raw 1.0 = 0 dBFS (digital clipping ceiling)
+      raw 0.5 = ~-6 dBFS
+      raw 0.0 = -∞ dBFS
+
+    We convert to dBFS, then add a reference offset so the display
+    reads in DJ-friendly terms:
+      display_dB = dBFS + reference_offset
+      display_dB = 20*log10(raw) + 18   (with default offset of 18)
+
+    Result: typical mix sits around 0 on the display, heavy peaks push
+    toward +6/+9, and clipping is at +12.
+
+    Returns display dB clamped to [-60, +15] (slightly wider than the
+    meter range so we can detect out-of-bounds).
+    """
+    if raw_value <= 0.0:
+        return -60.0
+
+    db_fs = 20.0 * _math.log10(raw_value)
+    display_db = db_fs + _cfg.METER_REFERENCE_OFFSET_DB
+
+    # Clamp to a wide range (meter display is -30 to +12,
+    # but we allow wider for CLIP detection at +12+)
+    if display_db < -60.0:
+        return -60.0
+    if display_db > 15.0:
+        return 15.0
+    return display_db
+
+
+def apply_meter_ballistics(current_db, previous_smoothed_db, dt):
+    """
+    Apply meter ballistics (release decay).
+
+    Attack: instant (if current > smoothed, snap to current).
+    Release: linear decay at cfg.METER_RELEASE_DB_PER_SEC.
+
+    This mimics real analog VU meters where the needle rises instantly
+    but falls slowly, giving a readable display even with transient peaks.
+
+    Args:
+        current_db:          latest display dB value (from raw_meter_to_display_db)
+        previous_smoothed_db: the smoothed value from the last frame
+        dt:                  time since last frame (seconds)
+
+    Returns:
+        new smoothed dB value
+    """
+    if current_db >= previous_smoothed_db:
+        # Attack: instant rise
+        return current_db
+    else:
+        # Release: decay linearly
+        decay = _cfg.METER_RELEASE_DB_PER_SEC * dt
+        smoothed = previous_smoothed_db - decay
+        # Don't decay below the current actual level
+        if smoothed < current_db:
+            return current_db
+        return smoothed
+
+
+def update_meter_peak_db(current_db, last_peak_db, last_peak_time, now):
+    """
+    Peak hold logic for the meter's peak indicator.
+
+    Three states:
+      1. New peak captured (current > held peak) → capture it
+      2. Within hold window → keep the held peak, don't decay
+      3. Hold expired → decay linearly until it reaches current level
+
+    Args:
+        current_db:     current smoothed display dB
+        last_peak_db:   the held peak dB from previous frame
+        last_peak_time: timestamp when the peak was captured
+        now:            current time
+
+    Returns:
+        (new_peak_db, new_peak_time)
+    """
+    # New peak — capture it
+    if current_db >= last_peak_db:
+        return current_db, now
+
+    # Within hold window — keep the peak
+    elapsed = now - last_peak_time
+    if elapsed < _cfg.METER_PEAK_HOLD_SECONDS:
+        return last_peak_db, last_peak_time
+
+    # Hold expired — start decaying
+    fall_elapsed = elapsed - _cfg.METER_PEAK_HOLD_SECONDS
+    decayed = last_peak_db - (_cfg.METER_PEAK_FALL_DB_PER_SEC * fall_elapsed)
+
+    # Don't decay below current level
+    if decayed < current_db:
+        return current_db, now
+
+    return max(decayed, -60.0), last_peak_time
+
+
+def compute_clip_state(display_db, was_active, last_active_time, now):
+    """
+    Compute the CLIP indicator state.
+
+    Two thresholds with smooth interpolation between them:
+      cfg.METER_CLIP_WARN_DB     (default +6)  → clip_level = 0.0 (yellow)
+      cfg.METER_CLIP_CRITICAL_DB (default +9)  → clip_level = 1.0 (red)
+
+    Between the two thresholds, clip_level interpolates linearly:
+      +6 dB → 0.0 (pure yellow)
+      +7 dB → 0.33 (yellowish orange)
+      +8 dB → 0.66 (orangish red)
+      +9 dB → 1.0 (pure red, flicker starts)
+
+    After the level drops below warn_db, the CLIP stays active for
+    cfg.METER_CLIP_FADEOUT_SECONDS (default 0.5s) then fades out.
+
+    Args:
+        display_db:       current display dB level
+        was_active:       whether CLIP was active last frame
+        last_active_time: when CLIP was last actively triggered
+        now:              current time
+
+    Returns:
+        (is_active, clip_level, new_last_active_time)
+        where:
+          is_active:  bool — should the CLIP indicator be visible
+          clip_level: 0.0-1.0 — color interpolation (0=yellow, 1=red)
+          new_last_active_time: updated timestamp
+    """
+    warn_db = _cfg.METER_CLIP_WARN_DB
+    crit_db = _cfg.METER_CLIP_CRITICAL_DB
+
+    if display_db >= warn_db:
+        # Level is above warning threshold — CLIP is active
+        if crit_db > warn_db:
+            # Interpolate between warn and critical
+            fraction = (display_db - warn_db) / (crit_db - warn_db)
+            clip_level = max(0.0, min(1.0, fraction))
+        else:
+            clip_level = 1.0
+
+        return True, clip_level, now
+
+    elif was_active:
+        # Level dropped below threshold — check fadeout
+        elapsed_since_active = now - last_active_time
+        if elapsed_since_active < _cfg.METER_CLIP_FADEOUT_SECONDS:
+            # Still in fadeout period — fade clip_level toward 0
+            fade_fraction = elapsed_since_active / _cfg.METER_CLIP_FADEOUT_SECONDS
+            clip_level = max(0.0, 1.0 - fade_fraction)
+            return True, clip_level, last_active_time
+        else:
+            # Fadeout complete — turn off
+            return False, 0.0, last_active_time
+
+    else:
+        # Not active, level is below threshold
+        return False, 0.0, last_active_time
+
+
+def should_clip_flicker(clip_level, now):
+    """
+    Determine whether the CLIP indicator should be in its "on" or "off"
+    flicker phase. Only flickers when clip_level is above a threshold
+    (when approaching or exceeding the critical zone).
+
+    Flicker rate is cfg.METER_CLIP_FLICKER_HZ (default 4 Hz = 250ms cycle).
+
+    Args:
+        clip_level: 0.0-1.0 from compute_clip_state
+        now:        current time
+
+    Returns:
+        True if the CLIP indicator should be BRIGHT this frame,
+        False if it should be DIM (or not flickering at all).
+    """
+    # Only flicker when clip_level is significant (above 0.5 = approaching critical)
+    if clip_level < 0.5:
+        # Below midpoint — solid on, no flicker
+        return True
+
+    # Above midpoint — flicker at configured rate
+    hz = _cfg.METER_CLIP_FLICKER_HZ
+    if hz <= 0:
+        return True
+
+    cycle_s = 1.0 / hz
+    position_in_cycle = (now % cycle_s) / cycle_s
+
+    # Square wave: on for first half of cycle, off for second half
+    return position_in_cycle < 0.5
+
+
+def clip_level_to_color(clip_level):
+    """
+    Convert clip_level (0.0 to 1.0) to an RGB hex color string.
+
+    Smooth gradient:
+      0.0 → yellow   (#f4d22b)
+      0.3 → orange   (#f4962b)
+      0.7 → red-orange (#ee4422)
+      1.0 → red      (#ff3b30)
+
+    Uses linear interpolation in RGB space.
+
+    Args:
+        clip_level: 0.0 (warning/yellow) to 1.0 (critical/red)
+
+    Returns:
+        hex color string like "#ff6c2c"
+    """
+    # Define the gradient stops
+    if clip_level <= 0.0:
+        return "#f4d22b"  # yellow
+    elif clip_level >= 1.0:
+        return "#ff3b30"  # red
+
+    # Smooth interpolation through orange
+    # Yellow (#f4d22b) → Orange (#ff6c2c) → Red (#ff3b30)
+    if clip_level < 0.5:
+        # Yellow to orange (first half)
+        t = clip_level / 0.5
+        r = int(0xf4 + (0xff - 0xf4) * t)
+        g = int(0xd2 + (0x6c - 0xd2) * t)
+        b = int(0x2b + (0x2c - 0x2b) * t)
+    else:
+        # Orange to red (second half)
+        t = (clip_level - 0.5) / 0.5
+        r = int(0xff + (0xff - 0xff) * t)
+        g = int(0x6c + (0x3b - 0x6c) * t)
+        b = int(0x2c + (0x30 - 0x2c) * t)
+
+    r = max(0, min(255, r))
+    g = max(0, min(255, g))
+    b = max(0, min(255, b))
+
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def display_db_to_segment(display_db, total_segments=15, db_min=-30.0, db_max=12.0):
+    """
+    Convert display dB to a segment index (0 = bottom, total_segments-1 = top).
+
+    The meter has 15 segments covering -30 dB to +12 dB (3 dB each):
+      segment 0  = -30 dB (bottom, green)
+      segment 7  = -9 dB
+      segment 10 = 0 dB (orange, unity)
+      segment 14 = +12 dB (top, red)
+
+    Returns the number of segments that should be LIT (0 to total_segments).
+    """
+    if display_db <= db_min:
+        return 0
+    if display_db >= db_max:
+        return total_segments
+
+    fraction = (display_db - db_min) / (db_max - db_min)
+    return int(fraction * total_segments)
+
+
+def segment_color(segment_index, total_segments=15):
+    """
+    Returns the color for a given segment index in the DJM-900 meter.
+
+    Color zones (matching the reference image):
+      Segments 0-9   (bottom, -30 to -3 dB)  → yellow/green
+      Segments 10-12 (0 to +6 dB)            → orange
+      Segment 13     (+9 dB)                  → orange-red
+      Segment 14     (+12 dB, top)            → red
+
+    Returns: (on_color, off_color) tuple of hex strings.
+    """
+    if segment_index >= 14:
+        # Top segment — red
+        return "#ee2222", "#1e0c0c"
+    elif segment_index >= 13:
+        # Near-top — orange-red
+        return "#ee6622", "#1e120c"
+    elif segment_index >= 10:
+        # Orange zone (0 to +6 dB)
+        return "#eeaa22", "#1e1a0c"
+    else:
+        # Yellow-green zone (-30 to -3 dB)
+        return "#88cc22", "#0c1e0c"

@@ -145,15 +145,24 @@ state = {
     "_eq_ramp_duration":   [0.0]   * EQ_MACRO_COUNT,
 
     # ─── EQ meter (channel output level) ───
-    "eq_meter_left":    0.0,
-    "eq_meter_right":   0.0,
-    "eq_meter_peak":    0.0,
-    "eq_meter_peak_time": 0.0,
+    # Raw values from Ableton (0.0 to 1.0 normalized peak)
+    "eq_meter_left":        0.0,
+    "eq_meter_right":       0.0,
 
-    # ─── Volume + R3 mute ───
-    "_r3_last_click":   0.0,
-    "_vol_last_sent":   0.0,
-    "_vol_last_value":  ABLETON_UNITY,
+    # OLD meter state (kept until Phase 4 replaces the drawing code)
+    "eq_meter_peak":        0.0,
+    "eq_meter_peak_time":   0.0,
+
+    # Build B Phase 2: processed meter values for the new DJM-style display
+    "meter_display_db":     -60.0,
+    "meter_smoothed_db":    -60.0,
+    "meter_peak_db":        -60.0,
+    "meter_peak_time":      0.0,
+
+    # CLIP indicator state
+    "clip_active":          False,
+    "clip_level":           0.0,
+    "clip_last_active_time": 0.0,
 
     # ─── UI flash + last action ───
     "last_action":      "Starting up…",
