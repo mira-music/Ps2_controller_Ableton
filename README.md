@@ -4,6 +4,8 @@
 
 ### A USB Gamepad Turned Into a Live Performance Instrument for Ableton Live
 
+![FX Machine Main UI](docs/screenshots/fx_machine_ui_v_9_11.png)
+
 *Designed for melodic house & progressive deep house*
 
 **v9.11** · Modeled after the Pioneer DJM-900 NXS2 channel strip topology
@@ -132,6 +134,32 @@ A 24-segment vertical LED meter beside the EQ stack shows **real-time audio outp
 | **FX Mode** | Hold L1 | Both sticks control FX macros, view follows |
 | **EQ Mode** | Tap R3 | Right stick = EQ encoder + gestures |
 | **Volume** | Hold SELECT | Right stick Y = track volume |
+
+---
+
+## 📸 Gallery
+
+### Default / Navigation Mode
+
+<div align="center">
+
+![Main UI](docs/screenshots/screenshot-main.png)
+
+</div>
+
+Two-column layout: vertical EQ stack with DJM-900 style channel meter on the left, session navigation info on the right (bookmarks, groups, track / scene / clip names, position counters, volume display, modifier pills). FX panel spans the full width below.
+
+The interface is built with Tkinter and rendered at 40 Hz. Knob bodies use canvas-drawn metallic gradients with white indicator lines, dB tick labels around the perimeter, and subtle glow rings to indicate selected/armed states.
+
+### EQ Mode Active
+
+<div align="center">
+
+![EQ Mode Active](docs/screenshots/ableton_fx_machine.png)
+
+</div>
+
+When EQ mode is toggled on (R3 in nav layer), the selected band glows white and the status bar shows the active controls. The right stick becomes an encoder for value control on the X axis, with double-flick gestures for band switching (Y) and smart kill / normalize / boost actions (X). The real-time audio output meter responds to the EQ track's actual signal level via OSC listeners on Ableton's `output_meter_left/right`.
 
 ---
 
@@ -276,6 +304,8 @@ fxmachine/
 ├── build.py                    PyInstaller .exe builder
 ├── README.md                   This file
 ├── .gitignore
+├── docs/
+│   └── screenshots/            UI screenshots embedded in README
 └── src/
     ├── config.py               All constants (timings, deadzones, curves)
     ├── state.py                Shared state + thread locks
@@ -556,8 +586,9 @@ You are NOT permitted to:
 
 **Ayoub Agoujdad**
 
-🎵 Artist alias: **[MIRA___OFC](https://instagram.com/MIRA___OFC)**  
-🎛️ Project: **Modulated_OFC**
+🎵 Artist alias: **[MIRA](https://instagram.com/MIRA___OFC)** (formerly half of **Mirymood** duo)  
+🎛️ Project: **Modulated_OFC**  
+🇲🇦 Based in Marrakech, Morocco
 
 Made by and for live performance.
 
