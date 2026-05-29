@@ -629,3 +629,340 @@ def segment_color(segment_index, total_segments=15):
     else:
         # Yellow-green zone (-30 to -3 dB)
         return "#88cc22", "#0c1e0c"
+        
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  BUILD B PHASE 4 — DJM-900 METER + TRIM KNOB + ROUNDED RECT HELPER
+#
+#  These functions are DEFINED here but NOT CALLED yet.
+#  Step 2 (builder.py) creates the canvas widgets.
+#  Step 3 (updater.py) calls these functions to draw on them.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_djm_meter_cache = {}
+
+def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_flicker_on):
+    """
+    Draw DJM-900 NXS2 style channel meter:
+      - 22 LED segments from -30 dB to +12 dB
+      - Each LED has a brighter center glow (3-stripe rendering)
+      - Wide black gaps between LEDs
+      - Rounded corners via _rounded_rect helper
+      - dB labels precisely positioned on the left
+      - CLIP indicator box at top with 2-stage color
+      - Warm desaturated color palette matching DJM-900
+    """
+    cache_key = (
+        round(smoothed_db, 1),
+        round(peak_db, 1),
+        clip_active,
+        round(clip_level, 2),
+        clip_flicker_on,
+    )
+    if _djm_meter_cache.get("m") == cache_key:
+        return
+    _djm_meter_cache["m"] = cache_key
+
+    canvas.delete("all")
+
+    w = int(canvas['width'])
+    h = int(canvas['height'])
+
+    # Layout constants
+    label_width = 20
+    led_left = label_width + 3
+    led_right = led_left + 8
+
+    # CLIP box
+    clip_h = 16
+    clip_top = 2
+    clip_bottom = clip_top + clip_h
+    clip_left = led_left - 2
+    clip_right = w - 2
+
+    # Gap between CLIP and meter
+    clip_to_meter_gap = 8
+
+    # Meter segments
+    total_segs = 22
+    seg_gap = 5
+    meter_top = clip_bottom + clip_to_meter_gap
+    meter_bottom = h - 4
+    meter_h_px = meter_bottom - meter_top
+    seg_h = max(3.0, (meter_h_px - (total_segs - 1) * seg_gap) / total_segs)
+
+    # dB range
+    db_min = -30.0
+    db_max = 12.0
+    db_range = db_max - db_min
+
+    # ── CLIP indicator ──
+    if clip_active:
+        if clip_flicker_on:
+            clip_fill = clip_level_to_color(clip_level)
+            clip_outline = "#cc2222"
+            clip_text_color = "#ffffff"
+        else:
+            clip_fill = "#1a0808"
+            clip_outline = "#552222"
+            clip_text_color = "#553333"
+    else:
+        clip_fill = "#0d0d0d"
+        clip_outline = "#2a2a2a"
+        clip_text_color = "#2a2a2a"
+
+    _rounded_rect(canvas, clip_left, clip_top, clip_right, clip_bottom,
+                  radius=3, fill=clip_fill, outline=clip_outline)
+    canvas.create_text(
+        (clip_left + clip_right) // 2, (clip_top + clip_bottom) // 2,
+        text="CLIP", fill=clip_text_color,
+        font=("Segoe UI", 7, "bold")
+    )
+
+    # ── How many segments lit ──
+    if smoothed_db <= db_min:
+        lit = 0
+    elif smoothed_db >= db_max:
+        lit = total_segs
+    else:
+        lit = int(((smoothed_db - db_min) / db_range) * total_segs)
+
+    # Peak segment
+    if peak_db <= db_min:
+        peak_seg = -1
+    elif peak_db >= db_max:
+        peak_seg = total_segs - 1
+    else:
+        peak_seg = int(((peak_db - db_min) / db_range) * total_segs) - 1
+
+    # ── Color palette ──
+    def get_seg_colors(seg_index):
+        frac = seg_index / (total_segs - 1) if total_segs > 1 else 0
+
+        if frac >= 0.91:
+            on_r, on_g, on_b = 0xcc, 0x22, 0x22
+            off_r, off_g, off_b = 0x14, 0x06, 0x06
+        elif frac >= 0.82:
+            on_r, on_g, on_b = 0xbb, 0x55, 0x22
+            off_r, off_g, off_b = 0x14, 0x0a, 0x06
+        elif frac >= 0.73:
+            on_r, on_g, on_b = 0xaa, 0x77, 0x22
+            off_r, off_g, off_b = 0x12, 0x0e, 0x06
+        elif frac >= 0.64:
+            on_r, on_g, on_b = 0x99, 0x88, 0x22
+            off_r, off_g, off_b = 0x10, 0x0e, 0x06
+        elif frac >= 0.45:
+            on_r, on_g, on_b = 0x77, 0x88, 0x22
+            off_r, off_g, off_b = 0x0c, 0x0e, 0x06
+        else:
+            on_r, on_g, on_b = 0x55, 0x77, 0x28
+            off_r, off_g, off_b = 0x08, 0x0c, 0x06
+
+        on_color = f"#{on_r:02x}{on_g:02x}{on_b:02x}"
+        off_color = f"#{off_r:02x}{off_g:02x}{off_b:02x}"
+
+        bright_r = min(255, int(on_r * 1.4))
+        bright_g = min(255, int(on_g * 1.4))
+        bright_b = min(255, int(on_b * 1.4))
+        bright_color = f"#{bright_r:02x}{bright_g:02x}{bright_b:02x}"
+
+        return on_color, off_color, bright_color
+
+    # ── Draw LED segments ──
+    for i in range(total_segs):
+        seg_bottom = meter_bottom - i * (seg_h + seg_gap)
+        seg_top = seg_bottom - seg_h
+
+        on_color, off_color, bright_color = get_seg_colors(i)
+
+        is_lit = (i < lit)
+        is_peak = (i == peak_seg and peak_db > db_min)
+
+        if is_peak:
+            edge_color = "#bbbbbb"
+            center_color = "#ffffff"
+        elif is_lit:
+            edge_color = on_color
+            center_color = bright_color
+        else:
+            edge_color = off_color
+            center_color = off_color
+
+        third = max(1.0, seg_h / 3.0)
+
+        _rounded_rect(canvas,
+                       led_left, seg_top,
+                       led_right, seg_top + third,
+                       radius=2, fill=edge_color)
+
+        canvas.create_rectangle(
+            led_left, seg_top + third,
+            led_right, seg_bottom - third,
+            fill=center_color, outline="", width=0
+        )
+
+        _rounded_rect(canvas,
+                       led_left, seg_bottom - third,
+                       led_right, seg_bottom,
+                       radius=2, fill=edge_color)
+
+    # ── dB labels ──
+    db_labels = [
+        (12, "+12"), (9, "+9"), (6, "+6"), (3, "+3"), (0, "0"),
+        (-3, "-3"), (-6, "-6"), (-9, "-9"), (-12, "-12"),
+        (-15, "-15"), (-18, "-18"), (-21, "-21"), (-24, "-24"),
+        (-27, "-27"), (-30, "-30"),
+    ]
+
+    for db_val, label_text in db_labels:
+        frac = (db_val - db_min) / db_range
+        y = meter_bottom - frac * meter_h_px
+
+        canvas.create_text(
+            label_width - 1, y,
+            text=label_text,
+            fill="#888888",
+            font=("Segoe UI", 5, "normal"),
+            anchor="e"
+        )
+
+    canvas.create_text(
+        label_width - 1, h - 1,
+        text="dB",
+        fill="#666666",
+        font=("Segoe UI", 5, "bold"),
+        anchor="e"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  TRIM KNOB — same metallic style but -∞/0/+9 range labels
+# ═══════════════════════════════════════════════════════════════════════════
+
+_trim_knob_cache = {}
+
+def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
+    """
+    TRIM knob with -∞/0/+9 labels (different from EQ's -∞/0/+6).
+    Same metallic DJM-900 style as draw_eq_knob.
+    """
+    cache_key = (round(visual_pos, 3), selected, armed)
+    if _trim_knob_cache.get(band_idx) == cache_key:
+        return
+    _trim_knob_cache[band_idx] = cache_key
+
+    canvas.delete("all")
+
+    w = int(canvas['width'])
+    h = int(canvas['height'])
+    cx = w // 2
+    cy = h // 2
+
+    r_outer = min(w, h) // 2 - 10
+    r_ring  = r_outer - 2
+    r_body1 = r_outer - 7
+    r_body2 = r_outer - 11
+    r_body3 = r_outer - 15
+    r_cap   = max(3, r_outer - 20)
+
+    canvas.create_oval(cx - r_outer, cy - r_outer, cx + r_outer, cy + r_outer,
+                       fill=EQ_KNOB_RING_OUTER, outline=EQ_KNOB_RING_DARK, width=1)
+
+    canvas.create_arc(cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring,
+                      start=225, extent=-270, style="arc", outline=EQ_KNOB_ARC_BG, width=2)
+
+    if abs(visual_pos - 0.5) > 0.005:
+        if visual_pos < 0.5:
+            extent = (0.5 - visual_pos) * 270
+            start_angle = 90
+        else:
+            extent = -(visual_pos - 0.5) * 270
+            start_angle = 90
+        canvas.create_arc(cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring,
+                          start=start_angle, extent=extent,
+                          style="arc", outline=EQ_KNOB_ARC_ACTIVE, width=2)
+
+    for tick_angle_deg in range(225, -46, -30):
+        tick_rad = math.radians(tick_angle_deg)
+        ox = cx + (r_ring + 1) * math.cos(tick_rad)
+        oy = cy - (r_ring + 1) * math.sin(tick_rad)
+        ix = cx + (r_ring - 2) * math.cos(tick_rad)
+        iy = cy - (r_ring - 2) * math.sin(tick_rad)
+        canvas.create_line(ix, iy, ox, oy, fill=EQ_KNOB_BODY_LIGHT, width=1)
+
+    canvas.create_line(cx, cy - (r_ring + 2), cx, cy - (r_ring - 3),
+                       fill=EQ_KNOB_DETENT, width=2)
+
+    label_r = r_outer + 6
+    lx = cx + label_r * math.cos(math.radians(225))
+    ly = cy - label_r * math.sin(math.radians(225))
+    canvas.create_text(lx, ly, text="−∞", fill=EQ_KNOB_BODY_LIGHT,
+                       font=("Segoe UI", 6, "bold"))
+    canvas.create_text(cx, cy - label_r, text="0", fill=EQ_KNOB_DETENT,
+                       font=("Segoe UI", 6, "bold"))
+    rx = cx + label_r * math.cos(math.radians(-45))
+    ry = cy - label_r * math.sin(math.radians(-45))
+    canvas.create_text(rx, ry, text="+9", fill=EQ_KNOB_BODY_LIGHT,
+                       font=("Segoe UI", 6, "bold"))
+
+    canvas.create_oval(cx - r_body1, cy - r_body1, cx + r_body1, cy + r_body1,
+                       fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1)
+    canvas.create_oval(cx - r_body2, cy - r_body2, cx + r_body2, cy + r_body2,
+                       fill=EQ_KNOB_BODY_MID, outline="")
+
+    if armed:
+        canvas.create_oval(cx - r_body2 - 1, cy - r_body2 - 1,
+                           cx + r_body2 + 1, cy + r_body2 + 1,
+                           outline=EQ_LABEL_ARMED, width=2)
+    elif selected:
+        canvas.create_oval(cx - r_body2 - 1, cy - r_body2 - 1,
+                           cx + r_body2 + 1, cy + r_body2 + 1,
+                           outline=EQ_LABEL_SELECTED, width=1)
+
+    canvas.create_oval(cx - r_body3, cy - r_body3, cx + r_body3, cy + r_body3,
+                       fill=EQ_KNOB_BODY_LIGHT, outline="")
+
+    angle_deg = 225 - 270 * visual_pos
+    angle_rad = math.radians(angle_deg)
+    lix = cx + (r_cap + 1) * math.cos(angle_rad)
+    liy = cy - (r_cap + 1) * math.sin(angle_rad)
+    lox = cx + (r_body1 - 1) * math.cos(angle_rad)
+    loy = cy - (r_body1 - 1) * math.sin(angle_rad)
+    canvas.create_line(lix, liy, lox, loy, fill=EQ_KNOB_INDICATOR, width=3)
+
+    canvas.create_oval(cx - r_cap, cy - r_cap, cx + r_cap, cy + r_cap,
+                       fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ROUNDED RECTANGLE HELPER (used by draw_djm_meter and CLIP box)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _rounded_rect(canvas, x1, y1, x2, y2, radius=3, fill="#000000", outline=""):
+    """Draw a rectangle with rounded corners using overlapping shapes."""
+    r = min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2)
+    if r < 1:
+        canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=0)
+        return
+
+    canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline="", width=0)
+    canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=fill, outline="", width=0)
+
+    canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r, fill=fill, outline="", width=0)
+    canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r, fill=fill, outline="", width=0)
+    canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2, fill=fill, outline="", width=0)
+    canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2, fill=fill, outline="", width=0)
+
+    if outline:
+        canvas.create_arc(x1, y1, x1 + 2*r, y1 + 2*r, start=90, extent=90,
+                          style="arc", outline=outline, width=1)
+        canvas.create_arc(x2 - 2*r, y1, x2, y1 + 2*r, start=0, extent=90,
+                          style="arc", outline=outline, width=1)
+        canvas.create_arc(x1, y2 - 2*r, x1 + 2*r, y2, start=180, extent=90,
+                          style="arc", outline=outline, width=1)
+        canvas.create_arc(x2 - 2*r, y2 - 2*r, x2, y2, start=270, extent=90,
+                          style="arc", outline=outline, width=1)
+        canvas.create_line(x1 + r, y1, x2 - r, y1, fill=outline, width=1)
+        canvas.create_line(x1 + r, y2, x2 - r, y2, fill=outline, width=1)
+        canvas.create_line(x1, y1 + r, x1, y2 - r, fill=outline, width=1)
+        canvas.create_line(x2, y1 + r, x2, y2 - r, fill=outline, width=1)

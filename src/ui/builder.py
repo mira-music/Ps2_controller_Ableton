@@ -16,7 +16,8 @@
 import tkinter as tk
 
 from src.config import (
-    VERSION, EQ_SLOT_LOW, EQ_SLOT_MID, EQ_SLOT_HIGH,
+    VERSION, EQ_SLOT_LOW, EQ_SLOT_MID, EQ_SLOT_HIGH, EQ_SLOT_TRIM,
+    EQ_MACRO_COUNT,
 )
 from src.engine.actions import action_stop_track, action_force_refresh
 from src.ui.palette import (
@@ -103,28 +104,34 @@ def build_ui(root):
     knobs_col = tk.Frame(eq_body, bg=ABL_PANEL_DARK)
     knobs_col.pack(side="left", fill="y", padx=2, pady=2)
 
-    EQ_KNOB_SIZE_V910 = 78
-    eq_cells = [None, None, None]
-    display_order  = [EQ_SLOT_HIGH, EQ_SLOT_MID, EQ_SLOT_LOW]
-    display_labels = {EQ_SLOT_LOW: "LOW", EQ_SLOT_MID: "MID", EQ_SLOT_HIGH: "HIGH"}
+    EQ_KNOB_SIZE = 72
+    eq_cells = [None] * EQ_MACRO_COUNT
+
+    # Display order: TRIM on top, then HIGH, MID, LOW (DJM-900 layout)
+    display_order = [EQ_SLOT_TRIM, EQ_SLOT_HIGH, EQ_SLOT_MID, EQ_SLOT_LOW]
+    display_labels = {
+        EQ_SLOT_LOW:  "LOW",
+        EQ_SLOT_MID:  "MID",
+        EQ_SLOT_HIGH: "HIGH",
+        EQ_SLOT_TRIM: "TRIM",
+    }
 
     for band_idx in display_order:
-        cell = tk.Frame(knobs_col, bg=ABL_CELL, padx=6, pady=4)
+        cell = tk.Frame(knobs_col, bg=ABL_CELL, padx=6, pady=5)
         cell.pack(fill="x", pady=1)
 
         name_lbl = tk.Label(cell, text=display_labels[band_idx],
                             bg=ABL_CELL, fg=EQ_LABEL_COLOR,
                             font=F_EQ_BAND, anchor="center")
-        name_lbl.pack(fill="x", pady=(0, 2))
+        name_lbl.pack(fill="x", pady=(0, 1))
 
-        canvas = tk.Canvas(cell, width=EQ_KNOB_SIZE_V910,
-                           height=EQ_KNOB_SIZE_V910,
+        canvas = tk.Canvas(cell, width=EQ_KNOB_SIZE, height=EQ_KNOB_SIZE,
                            bg=ABL_CELL, highlightthickness=0)
         canvas.pack()
 
         value_lbl = tk.Label(cell, text="0.00 dB", bg=ABL_CELL,
                              fg=ABL_TEXT, font=F_VALUE, anchor="center")
-        value_lbl.pack(fill="x", pady=(2, 0))
+        value_lbl.pack(fill="x", pady=(1, 0))
 
         eq_cells[band_idx] = (cell, canvas, name_lbl, value_lbl)
 
@@ -135,9 +142,9 @@ def build_ui(root):
     tk.Label(meter_col, text="OUT", bg=ABL_PANEL_DARK,
              fg=ABL_TEXT_DIM, font=F_LABEL_TINY).pack(pady=(2, 4))
 
-    meter_h = (EQ_KNOB_SIZE_V910 + 38) * 3
-    eq_channel_meter = tk.Canvas(meter_col, width=24, height=meter_h,
-                                  bg="#0a0a0a", highlightthickness=0)
+    meter_h = (EQ_KNOB_SIZE + 38) * 4 + 10
+    eq_channel_meter = tk.Canvas(meter_col, width=42, height=meter_h,
+                                  bg=ABL_PANEL_DARK, highlightthickness=0)
     eq_channel_meter.pack(pady=(0, 2))
 
     # ─────── RIGHT COLUMN: NAV INFO ───────

@@ -17,9 +17,12 @@ from src.config import (
     UI_REFRESH_MS, BLINK_PERIOD_MS,
     ABLETON_UNITY,
     EQ_NEUTRAL_MACRO,
+    EQ_MACRO_COUNT,
+    EQ_SLOT_TRIM,
     FX_TRACK_NAME,
     EQ_MACRO_NAMES_EXPECTED, FX_MACRO_NAMES_EXPECTED,
     FX_SLOT_FILTER_FREQ, FX_SLOT_FILTER_MODE, FX_SLOT_STUTTER, FX_SLOT_FX_SEND,
+    TRIM_NEUTRAL_MACRO,
 )
 from src.helpers import (
     db_from_vol, int_to_hex_color, clear_flashes_if_expired,
@@ -36,11 +39,30 @@ from src.ui.palette import (
     EQ_LABEL_COLOR, EQ_LABEL_SELECTED, EQ_LABEL_ARMED,
 )
 from src.ui.widgets import (
-    set_label, draw_knob, draw_eq_knob, draw_channel_meter, update_meter_peak,
+    set_label, draw_knob, draw_eq_knob, draw_trim_knob,
+    draw_djm_meter,
+    raw_meter_to_display_db, apply_meter_ballistics,
+    update_meter_peak_db, compute_clip_state, should_clip_flicker,
+    update_meter_peak, draw_channel_meter,
 )
 from src.log_setup import get_logger
 
 log = get_logger(__name__)
+
+def _trim_visual_position(macro_value):
+    """
+    Convert TRIM macro value to visual knob position (0.0-1.0).
+    TRIM uses TRIM_NEUTRAL_MACRO (64.0) as center, not EQ_NEUTRAL_MACRO (107.9).
+    """
+    if macro_value <= TRIM_NEUTRAL_MACRO:
+        if TRIM_NEUTRAL_MACRO <= 0:
+            return 0.0
+        return (macro_value / TRIM_NEUTRAL_MACRO) * 0.5
+    else:
+        boost_range = 127.0 - TRIM_NEUTRAL_MACRO
+        if boost_range <= 0:
+            return 0.5
+        return 0.5 + ((macro_value - TRIM_NEUTRAL_MACRO) / boost_range) * 0.5
 # ═══════════════════════════════════════════════════════════════════════════
 #  BLINK HELPER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -266,8 +288,59 @@ def update_ui(root, lbl):
                   "EQ inactive (R3 to toggle)", fg=ABL_TEXT_FAINT)
         lbl["eq_glow"].config(bg=EQ_KNOB_RING_DARK)
 
-    # ── EQ KNOBS (HIGH / MID / LOW) ──
-    for band_idx in range(3):
+    # ── EQ KNOBS (Build B: TRIM + HIGH + MID + LOW = 4 knobs) ──
+    for band_idx in range(EQ_MACRO_COUNT):
+        if lbl["eq_cells"][band_idx] is None:
+            continue
+        cell, canvas, name_lbl, value_lbl = lbl["eq_cells"][band_idx]
+        macro_val = eq_macro_values[band_idx] if band_idx < len(eq_macro_values) else 0.0
+        value_str = eq_value_strings[band_idx] if band_idx < len(eq_value_strings) else "—"
+
+        # Visual position depends on whether this is TRIM or an EQ band
+        is_trim = (band_idx == EQ_SLOT_TRIM)
+        if is_trim:
+            visual_pos = _trim_visual_position(macro_val)
+        else:
+            visual_pos = eq_visual_position(macro_val)
+
+        is_selected = (eq_mode_active and band_idx == eq_selected_band)
+        is_armed    = (eq_mode_active and band_idx == eq_armed_band)
+
+        # Cell background tinting
+        if is_armed:
+            cell_bg = EQ_GLOW_ARMED
+            label_color = EQ_LABEL_ARMED
+        elif is_selected:
+            cell_bg = EQ_GLOW_SELECTED
+            label_color = EQ_LABEL_SELECTED
+        else:
+            cell_bg = ABL_CELL
+            label_color = EQ_LABEL_COLOR
+
+        if cell.cget("bg") != cell_bg:
+            cell.config(bg=cell_bg)
+            canvas.config(bg=cell_bg)
+            name_lbl.config(bg=cell_bg)
+            value_lbl.config(bg=cell_bg)
+
+        # Draw the appropriate knob type
+        if is_trim:
+            draw_trim_knob(canvas, band_idx, visual_pos,
+                           selected=is_selected, armed=is_armed)
+        else:
+            draw_eq_knob(canvas, band_idx, visual_pos,
+                         selected=is_selected, armed=is_armed)
+
+        # Band name label
+        band_name = EQ_MACRO_NAMES_EXPECTED[band_idx]
+        display_name = band_name.replace("EQ ", "").upper()
+        if band_name == "Trim":
+            display_name = "TRIM"
+        set_label(name_lbl, f"eq_name_{band_idx}", display_name, fg=label_color)
+
+        # dB value string
+        set_label(value_lbl, f"eq_value_{band_idx}",
+                  value_str if value_str else "—", fg=label_color)
         cell, canvas, name_lbl, value_lbl = lbl["eq_cells"][band_idx]
         macro_val = eq_macro_values[band_idx] if band_idx < len(eq_macro_values) else EQ_NEUTRAL_MACRO
         value_str = eq_value_strings[band_idx] if band_idx < len(eq_value_strings) else "—"
@@ -363,7 +436,13 @@ def update_ui(root, lbl):
         st.state["eq_meter_peak"] = new_old_peak
         st.state["eq_meter_peak_time"] = new_old_peak_time
 
-    draw_channel_meter(lbl["eq_channel_meter"], current_level, new_old_peak)
+ # Draw the new DJM meter (Build B Phase 4)
+    clip_flicker_on = should_clip_flicker(clip_level, now)
+    draw_djm_meter(
+        lbl["eq_channel_meter"],
+        smoothed_db, new_peak_db,
+        clip_active, clip_level, clip_flicker_on
+    )
     
         # ── NOTIFICATION SLOT (Build B Phase 3) ──
     # Auto-push CLIP notifications when clipping is detected
