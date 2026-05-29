@@ -7,10 +7,32 @@
 
     draw_knob()           — FX macro knob (270° arc + body + indicator)
     draw_eq_knob()        — DJM-900 metallic EQ knob with dB labels
-    draw_channel_meter()  — 24-segment DJM channel meter with peak
-    update_meter_peak()   — peak hold/decay logic
+    draw_trim_knob()      — Same metallic style but -∞/0/+9 range labels
+    draw_channel_meter()  — 24-segment DJM channel meter with peak (legacy)
+    draw_djm_meter()      — Build B Phase 4: 22-segment DJM-900 NXS2 meter
+    update_meter_peak()   — Legacy peak hold/decay logic (0-1 scale)
+
+  Build B Phase 2 math functions (compute only, no drawing):
+    raw_meter_to_display_db()
+    apply_meter_ballistics()
+    update_meter_peak_db()
+    compute_clip_state()
+    should_clip_flicker()
+    clip_level_to_color()
+    display_db_to_segment()
+    segment_color()
 
   Plus set_label() — diff-based widget update to minimize Tk traffic.
+
+  Fixes applied:
+    - Removed redundant "import math as _math" and "from config_loader import cfg as _cfg"
+      that were duplicating top-level imports. All Phase 2/4 code now uses the
+      top-level `math` and `cfg` names consistently.
+    - Moved _rounded_rect() above draw_djm_meter() so it is defined before use
+      (was defined after, which works at call time in Python but hurts readability
+      and violates the principle that helpers precede their callers).
+    - draw_djm_meter() get_seg_colors() inner function documented as intentional
+      closure over local `total_segs`.
 ================================================================================
 """
 
@@ -21,6 +43,7 @@ from src.config import (
     EQ_METER_PEAK_HOLD_S, EQ_METER_PEAK_FALL,
     EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_NEUTRAL_MACRO,
 )
+from src.config_loader import cfg
 from src.ui.palette import (
     ABL_DIVIDER, ABL_YELLOW, ABL_RED,
     ABL_CELL_MOMENT, ABL_CELL_LOCK, ABL_CELL_HOT,
@@ -31,6 +54,7 @@ from src.ui.palette import (
     EQ_LABEL_ARMED, EQ_LABEL_SELECTED,
 )
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  DIRTY-CACHE LABEL SETTER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -38,10 +62,15 @@ from src.ui.palette import (
 _ui_cache = {}
 
 def set_label(widget, key, text, **kwargs):
+    """
+    Update a Tkinter Label only when its text or style has actually changed.
+    Avoids the per-frame Tk config() call overhead when nothing is different.
+    """
     cache_key = (key, text, tuple(sorted(kwargs.items())))
     if _ui_cache.get(key) != cache_key:
         widget.config(text=text, **kwargs)
         _ui_cache[key] = cache_key
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FX KNOB
@@ -50,6 +79,15 @@ def set_label(widget, key, text, **kwargs):
 _knob_cache = {}
 
 def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, moment=False):
+    """
+    FX macro knob: 270° arc background + active arc + body circle + indicator line.
+
+    value_frac: 0.0 (minimum) to 1.0 (maximum)
+    color:      accent color for the arc and indicator
+    active:     knob is currently being moved (yellow highlight)
+    locked:     knob is filter/wet locked (blue tint)
+    moment:     momentary effect active (red highlight)
+    """
     cache_key = (round(value_frac, 3), color, active, locked, moment)
     if _knob_cache.get(slot) == cache_key:
         return
@@ -64,6 +102,7 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
     r_outer = size // 2
     r_inner = max(4, r_outer - 5)
 
+    # Background arc (full 270° sweep, dark grey)
     canvas.create_arc(
         cx - r_outer, cy - r_outer,
         cx + r_outer, cy + r_outer,
@@ -71,6 +110,7 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
         style="arc", outline=ABL_DIVIDER, width=2
     )
 
+    # Active arc (fills clockwise from 7 o'clock by value_frac)
     if value_frac > 0:
         active_color = color
         if active:
@@ -84,17 +124,18 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
             style="arc", outline=active_color, width=3
         )
 
+    # Body circle fill
     if moment:
-        body_fill = ABL_CELL_MOMENT
+        body_fill    = ABL_CELL_MOMENT
         body_outline = ABL_RED
     elif locked:
-        body_fill = ABL_CELL_LOCK
+        body_fill    = ABL_CELL_LOCK
         body_outline = ABL_YELLOW
     elif active:
-        body_fill = ABL_CELL_HOT
+        body_fill    = ABL_CELL_HOT
         body_outline = ABL_YELLOW
     else:
-        body_fill = "#2a2a2a"
+        body_fill    = "#2a2a2a"
         body_outline = "#444444"
 
     canvas.create_oval(
@@ -103,6 +144,7 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
         fill=body_fill, outline=body_outline
     )
 
+    # Indicator line (points toward current value)
     angle_deg = 225 - 270 * value_frac
     angle_rad = math.radians(angle_deg)
     ix = cx + r_inner * 0.75 * math.cos(angle_rad)
@@ -114,6 +156,7 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
         indicator_color = ABL_YELLOW
     canvas.create_line(cx, cy, ix, iy, fill=indicator_color, width=2)
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  EQ KNOB (DJM-900 metallic with dB labels)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -123,7 +166,13 @@ _eq_knob_cache = {}
 def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
     """
     DJM-900 style EQ knob with dB tick labels around perimeter.
-    visual_pos: 0.0 = -∞ dB (far left), 0.5 = 0 dB (top), 1.0 = +6 dB (far right)
+
+    visual_pos: 0.0 = -∞ dB (far left / 7 o'clock)
+                0.5 = 0 dB  (top / 12 o'clock)
+                1.0 = +6 dB (far right / 5 o'clock)
+
+    The active arc draws FROM 12 o'clock TOWARD the current position,
+    showing boost (right of center) or cut (left of center) symmetrically.
     """
     cache_key = (round(visual_pos, 3), selected, armed)
     if _eq_knob_cache.get(band_idx) == cache_key:
@@ -151,7 +200,7 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         fill=EQ_KNOB_RING_OUTER, outline=EQ_KNOB_RING_DARK, width=1
     )
 
-    # Background arc
+    # Background arc (full 270° sweep)
     canvas.create_arc(
         cx - r_ring, cy - r_ring,
         cx + r_ring, cy + r_ring,
@@ -159,7 +208,9 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         style="arc", outline=EQ_KNOB_ARC_BG, width=2
     )
 
-    # Active arc from center toward current position
+    # Active arc: draws from 12 o'clock toward current position.
+    # Cut (visual_pos < 0.5): arc sweeps CCW (positive extent from 90°)
+    # Boost (visual_pos > 0.5): arc sweeps CW (negative extent from 90°)
     if abs(visual_pos - 0.5) > 0.005:
         if visual_pos < 0.5:
             extent = (0.5 - visual_pos) * 270
@@ -174,7 +225,7 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
             style="arc", outline=EQ_KNOB_ARC_ACTIVE, width=2
         )
 
-    # Perimeter tick marks every 30°
+    # Perimeter tick marks every 30° (10 ticks across the 270° sweep)
     for tick_angle_deg in range(225, -46, -30):
         tick_rad = math.radians(tick_angle_deg)
         outer_x = cx + (r_ring + 1) * math.cos(tick_rad)
@@ -184,11 +235,11 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         canvas.create_line(inner_x, inner_y, outer_x, outer_y,
                            fill=EQ_KNOB_BODY_LIGHT, width=1)
 
-    # Prominent center detent at 12 o'clock
+    # Prominent center detent mark at 12 o'clock
     canvas.create_line(cx, cy - (r_ring + 2), cx, cy - (r_ring - 3),
                        fill=EQ_KNOB_DETENT, width=2)
 
-    # dB tick labels
+    # dB range labels at the three key positions
     label_r = r_outer + 6
     lx = cx + label_r * math.cos(math.radians(225))
     ly = cy - label_r * math.sin(math.radians(225))
@@ -201,7 +252,7 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
     canvas.create_text(rx, ry, text="+6", fill=EQ_KNOB_BODY_LIGHT,
                        font=("Segoe UI", 6, "bold"))
 
-    # Metallic body layers
+    # Metallic body — three concentric ovals for depth illusion
     canvas.create_oval(
         cx - r_body1, cy - r_body1,
         cx + r_body1, cy + r_body1,
@@ -213,7 +264,143 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         fill=EQ_KNOB_BODY_MID, outline=""
     )
 
-    # Selected/armed glow ring
+    # Selected/armed glow ring (drawn on top of the mid body)
+    if armed:
+        canvas.create_oval(
+            cx - r_body2 - 1, cy - r_body2 - 1,
+            cx + r_body2 + 1, cy + r_body2 + 1,
+            outline=EQ_LABEL_ARMED, width=2
+        )
+    elif selected:
+        canvas.create_oval(
+            cx - r_body2 - 1, cy - r_body2 - 1,
+            cx + r_body2 + 1, cy + r_body2 + 1,
+            outline=EQ_LABEL_SELECTED, width=1
+        )
+
+    # Light highlight ring
+    canvas.create_oval(
+        cx - r_body3, cy - r_body3,
+        cx + r_body3, cy + r_body3,
+        fill=EQ_KNOB_BODY_LIGHT, outline=""
+    )
+
+    # White indicator line
+    angle_deg = 225 - 270 * visual_pos
+    angle_rad = math.radians(angle_deg)
+    line_inner_x = cx + (r_cap + 1) * math.cos(angle_rad)
+    line_inner_y = cy - (r_cap + 1) * math.sin(angle_rad)
+    line_outer_x = cx + (r_body1 - 1) * math.cos(angle_rad)
+    line_outer_y = cy - (r_body1 - 1) * math.sin(angle_rad)
+    canvas.create_line(line_inner_x, line_inner_y,
+                       line_outer_x, line_outer_y,
+                       fill=EQ_KNOB_INDICATOR, width=3)
+
+    # Center cap (darkest circle, sits on top of everything)
+    canvas.create_oval(
+        cx - r_cap, cy - r_cap,
+        cx + r_cap, cy + r_cap,
+        fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  TRIM KNOB — same metallic style, different range labels (-∞ / 0 / +9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_trim_knob_cache = {}
+
+def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
+    """
+    TRIM knob: identical metallic DJM-900 style as draw_eq_knob, but with
+    -∞/0/+9 range labels instead of -∞/0/+6.
+
+    visual_pos: 0.0 = -∞ dB, 0.5 = 0 dB (TRIM neutral at macro 64.0), 1.0 = +9 dB cap
+    """
+    cache_key = (round(visual_pos, 3), selected, armed)
+    if _trim_knob_cache.get(band_idx) == cache_key:
+        return
+    _trim_knob_cache[band_idx] = cache_key
+
+    canvas.delete("all")
+
+    w = int(canvas['width'])
+    h = int(canvas['height'])
+    cx = w // 2
+    cy = h // 2
+
+    r_outer = min(w, h) // 2 - 10
+    r_ring  = r_outer - 2
+    r_body1 = r_outer - 7
+    r_body2 = r_outer - 11
+    r_body3 = r_outer - 15
+    r_cap   = max(3, r_outer - 20)
+
+    canvas.create_oval(
+        cx - r_outer, cy - r_outer,
+        cx + r_outer, cy + r_outer,
+        fill=EQ_KNOB_RING_OUTER, outline=EQ_KNOB_RING_DARK, width=1
+    )
+
+    canvas.create_arc(
+        cx - r_ring, cy - r_ring,
+        cx + r_ring, cy + r_ring,
+        start=225, extent=-270,
+        style="arc", outline=EQ_KNOB_ARC_BG, width=2
+    )
+
+    if abs(visual_pos - 0.5) > 0.005:
+        if visual_pos < 0.5:
+            extent = (0.5 - visual_pos) * 270
+            start_angle = 90
+        else:
+            extent = -(visual_pos - 0.5) * 270
+            start_angle = 90
+        canvas.create_arc(
+            cx - r_ring, cy - r_ring,
+            cx + r_ring, cy + r_ring,
+            start=start_angle, extent=extent,
+            style="arc", outline=EQ_KNOB_ARC_ACTIVE, width=2
+        )
+
+    for tick_angle_deg in range(225, -46, -30):
+        tick_rad = math.radians(tick_angle_deg)
+        ox = cx + (r_ring + 1) * math.cos(tick_rad)
+        oy = cy - (r_ring + 1) * math.sin(tick_rad)
+        ix = cx + (r_ring - 2) * math.cos(tick_rad)
+        iy = cy - (r_ring - 2) * math.sin(tick_rad)
+        canvas.create_line(ix, iy, ox, oy, fill=EQ_KNOB_BODY_LIGHT, width=1)
+
+    canvas.create_line(
+        cx, cy - (r_ring + 2),
+        cx, cy - (r_ring - 3),
+        fill=EQ_KNOB_DETENT, width=2
+    )
+
+    # TRIM-specific range labels: -∞, 0, +9
+    label_r = r_outer + 6
+    lx = cx + label_r * math.cos(math.radians(225))
+    ly = cy - label_r * math.sin(math.radians(225))
+    canvas.create_text(lx, ly, text="−∞", fill=EQ_KNOB_BODY_LIGHT,
+                       font=("Segoe UI", 6, "bold"))
+    canvas.create_text(cx, cy - label_r, text="0", fill=EQ_KNOB_DETENT,
+                       font=("Segoe UI", 6, "bold"))
+    rx = cx + label_r * math.cos(math.radians(-45))
+    ry = cy - label_r * math.sin(math.radians(-45))
+    canvas.create_text(rx, ry, text="+9", fill=EQ_KNOB_BODY_LIGHT,
+                       font=("Segoe UI", 6, "bold"))
+
+    canvas.create_oval(
+        cx - r_body1, cy - r_body1,
+        cx + r_body1, cy + r_body1,
+        fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1
+    )
+    canvas.create_oval(
+        cx - r_body2, cy - r_body2,
+        cx + r_body2, cy + r_body2,
+        fill=EQ_KNOB_BODY_MID, outline=""
+    )
+
     if armed:
         canvas.create_oval(
             cx - r_body2 - 1, cy - r_body2 - 1,
@@ -233,35 +420,37 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         fill=EQ_KNOB_BODY_LIGHT, outline=""
     )
 
-    # White indicator line
     angle_deg = 225 - 270 * visual_pos
     angle_rad = math.radians(angle_deg)
-    line_inner_x = cx + (r_cap + 1) * math.cos(angle_rad)
-    line_inner_y = cy - (r_cap + 1) * math.sin(angle_rad)
-    line_outer_x = cx + (r_body1 - 1) * math.cos(angle_rad)
-    line_outer_y = cy - (r_body1 - 1) * math.sin(angle_rad)
-    canvas.create_line(line_inner_x, line_inner_y,
-                       line_outer_x, line_outer_y,
-                       fill=EQ_KNOB_INDICATOR, width=3)
+    lix = cx + (r_cap + 1) * math.cos(angle_rad)
+    liy = cy - (r_cap + 1) * math.sin(angle_rad)
+    lox = cx + (r_body1 - 1) * math.cos(angle_rad)
+    loy = cy - (r_body1 - 1) * math.sin(angle_rad)
+    canvas.create_line(lix, liy, lox, loy, fill=EQ_KNOB_INDICATOR, width=3)
 
-    # Center cap
     canvas.create_oval(
         cx - r_cap, cy - r_cap,
         cx + r_cap, cy + r_cap,
         fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1
     )
 
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  DJM CHANNEL METER (24 chunky LED segments + peak hold)
+#  DJM CHANNEL METER — Legacy 24-segment (active until Phase 4 replaces it)
 # ═══════════════════════════════════════════════════════════════════════════
 
 _channel_meter_cache = {}
 
 def draw_channel_meter(canvas, level, peak_level):
     """
-    DJM-900 style channel output meter.
-    level:      current audio level (0.0 to 1.0)
-    peak_level: held peak (0.0 to 1.0) — bright white indicator
+    Legacy DJM-900 style 24-segment channel meter.
+    level:      current audio level (0.0 to 1.0 raw)
+    peak_level: held peak (0.0 to 1.0 raw) — bright white indicator segment
+
+    Color zones (bottom to top):
+      Segments 0-14:  green  (safe)
+      Segments 15-20: yellow (loud)
+      Segments 21-23: red    (clipping zone)
     """
     cache_key = (round(level, 3), round(peak_level, 3))
     if _channel_meter_cache.get("k") == cache_key:
@@ -273,7 +462,7 @@ def draw_channel_meter(canvas, level, peak_level):
     w = int(canvas['width'])
     h = int(canvas['height'])
 
-    total = EQ_METER_SEGMENTS
+    total = EQ_METER_SEGMENTS    # 24
     gap   = 2
     seg_h = max(2.0, (h - (total - 1) * gap) / total)
 
@@ -300,7 +489,7 @@ def draw_channel_meter(canvas, level, peak_level):
         is_peak = (i == peak_seg and peak_level > 0.02)
 
         if is_peak:
-            fill = "#ffffff"  # bright white peak indicator
+            fill = "#ffffff"
         elif is_lit:
             fill = on_color
         else:
@@ -311,8 +500,17 @@ def draw_channel_meter(canvas, level, peak_level):
             fill=fill, outline="", width=0
         )
 
+
 def update_meter_peak(current, last_peak, last_peak_time, now):
-    """Peak hold + decay logic. Returns (new_peak, new_peak_time)."""
+    """
+    Legacy peak hold + decay logic (0.0-1.0 raw scale).
+    Returns (new_peak, new_peak_time).
+
+    Three states:
+      1. current >= last_peak  → capture new peak
+      2. Within hold window    → keep held peak
+      3. Hold expired          → linear decay at EQ_METER_PEAK_FALL dB/s
+    """
     if current >= last_peak:
         return current, now
     elapsed = now - last_peak_time
@@ -323,22 +521,19 @@ def update_meter_peak(current, last_peak, last_peak_time, now):
     if decayed < current:
         return current, now
     return max(decayed, 0.0), last_peak_time
-    
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  BUILD B PHASE 2 — DJM-900 METER MATH + CLIP DETECTION
-# ═══════════════════════════════════════════════════════════════════════════
 #
-#  New meter system: 15 segments from -30 dB to +12 dB (3 dB per segment)
-#  with CLIP indicator above. Replaces the old 24-segment system in Phase 4.
-#
-#  These functions compute values; they don't draw anything.
+#  These functions compute values only — no drawing.
 #  The UI updater calls them every frame and stores results in state.
-#  The UI builder/drawer reads state to render.
+#  draw_djm_meter() (Phase 4) reads state to render.
+#
+#  All references use the top-level `math` and `cfg` imports.
+#  (Previously had a redundant "import math as _math" and
+#  "from src.config_loader import cfg as _cfg" — both removed.)
 # ═══════════════════════════════════════════════════════════════════════════
-
-import math as _math
-from src.config_loader import cfg as _cfg
-
 
 def raw_meter_to_display_db(raw_value):
     """
@@ -351,23 +546,18 @@ def raw_meter_to_display_db(raw_value):
 
     We convert to dBFS, then add a reference offset so the display
     reads in DJ-friendly terms:
-      display_dB = dBFS + reference_offset
-      display_dB = 20*log10(raw) + 18   (with default offset of 18)
+      display_dB = 20*log10(raw) + cfg.METER_REFERENCE_OFFSET_DB
 
-    Result: typical mix sits around 0 on the display, heavy peaks push
-    toward +6/+9, and clipping is at +12.
+    With default offset of 18:
+      -18 dBFS (typical headroom) → display 0
+      0 dBFS (digital ceiling)   → display +18
 
-    Returns display dB clamped to [-60, +15] (slightly wider than the
-    meter range so we can detect out-of-bounds).
+    Returns display dB clamped to [-60, +15].
     """
     if raw_value <= 0.0:
         return -60.0
-
-    db_fs = 20.0 * _math.log10(raw_value)
-    display_db = db_fs + _cfg.METER_REFERENCE_OFFSET_DB
-
-    # Clamp to a wide range (meter display is -30 to +12,
-    # but we allow wider for CLIP detection at +12+)
+    db_fs = 20.0 * math.log10(raw_value)
+    display_db = db_fs + cfg.METER_REFERENCE_OFFSET_DB
     if display_db < -60.0:
         return -60.0
     if display_db > 15.0:
@@ -377,67 +567,57 @@ def raw_meter_to_display_db(raw_value):
 
 def apply_meter_ballistics(current_db, previous_smoothed_db, dt):
     """
-    Apply meter ballistics (release decay).
+    Apply meter ballistics (release decay only — attack is instant).
 
-    Attack: instant (if current > smoothed, snap to current).
-    Release: linear decay at cfg.METER_RELEASE_DB_PER_SEC.
+    Attack:  instant (if current > smoothed, snap immediately)
+    Release: linear decay at cfg.METER_RELEASE_DB_PER_SEC
 
     This mimics real analog VU meters where the needle rises instantly
-    but falls slowly, giving a readable display even with transient peaks.
+    but falls slowly, making transient peaks readable.
 
     Args:
-        current_db:          latest display dB value (from raw_meter_to_display_db)
-        previous_smoothed_db: the smoothed value from the last frame
-        dt:                  time since last frame (seconds)
+        current_db:           latest display dB value
+        previous_smoothed_db: smoothed value from the last frame
+        dt:                   time since last frame (seconds)
 
-    Returns:
-        new smoothed dB value
+    Returns: new smoothed dB value
     """
     if current_db >= previous_smoothed_db:
-        # Attack: instant rise
         return current_db
-    else:
-        # Release: decay linearly
-        decay = _cfg.METER_RELEASE_DB_PER_SEC * dt
-        smoothed = previous_smoothed_db - decay
-        # Don't decay below the current actual level
-        if smoothed < current_db:
-            return current_db
-        return smoothed
+    decay = cfg.METER_RELEASE_DB_PER_SEC * dt
+    smoothed = previous_smoothed_db - decay
+    if smoothed < current_db:
+        return current_db
+    return smoothed
 
 
 def update_meter_peak_db(current_db, last_peak_db, last_peak_time, now):
     """
-    Peak hold logic for the meter's peak indicator.
+    Peak hold logic for the dB-scale meter peak indicator.
 
     Three states:
-      1. New peak captured (current > held peak) → capture it
-      2. Within hold window → keep the held peak, don't decay
-      3. Hold expired → decay linearly until it reaches current level
+      1. New peak  → capture (current >= held peak)
+      2. Hold      → maintain for cfg.METER_PEAK_HOLD_SECONDS
+      3. Decay     → fall at cfg.METER_PEAK_FALL_DB_PER_SEC
 
     Args:
         current_db:     current smoothed display dB
-        last_peak_db:   the held peak dB from previous frame
-        last_peak_time: timestamp when the peak was captured
+        last_peak_db:   held peak dB from previous frame
+        last_peak_time: timestamp when peak was captured
         now:            current time
 
-    Returns:
-        (new_peak_db, new_peak_time)
+    Returns: (new_peak_db, new_peak_time)
     """
-    # New peak — capture it
     if current_db >= last_peak_db:
         return current_db, now
 
-    # Within hold window — keep the peak
     elapsed = now - last_peak_time
-    if elapsed < _cfg.METER_PEAK_HOLD_SECONDS:
+    if elapsed < cfg.METER_PEAK_HOLD_SECONDS:
         return last_peak_db, last_peak_time
 
-    # Hold expired — start decaying
-    fall_elapsed = elapsed - _cfg.METER_PEAK_HOLD_SECONDS
-    decayed = last_peak_db - (_cfg.METER_PEAK_FALL_DB_PER_SEC * fall_elapsed)
+    fall_elapsed = elapsed - cfg.METER_PEAK_HOLD_SECONDS
+    decayed = last_peak_db - (cfg.METER_PEAK_FALL_DB_PER_SEC * fall_elapsed)
 
-    # Don't decay below current level
     if decayed < current_db:
         return current_db, now
 
@@ -452,89 +632,61 @@ def compute_clip_state(display_db, was_active, last_active_time, now):
       cfg.METER_CLIP_WARN_DB     (default +6)  → clip_level = 0.0 (yellow)
       cfg.METER_CLIP_CRITICAL_DB (default +9)  → clip_level = 1.0 (red)
 
-    Between the two thresholds, clip_level interpolates linearly:
-      +6 dB → 0.0 (pure yellow)
-      +7 dB → 0.33 (yellowish orange)
-      +8 dB → 0.66 (orangish red)
-      +9 dB → 1.0 (pure red, flicker starts)
+    After level drops below warn_db, CLIP stays active for
+    cfg.METER_CLIP_FADEOUT_SECONDS then fades out.
 
-    After the level drops below warn_db, the CLIP stays active for
-    cfg.METER_CLIP_FADEOUT_SECONDS (default 0.5s) then fades out.
-
-    Args:
-        display_db:       current display dB level
-        was_active:       whether CLIP was active last frame
-        last_active_time: when CLIP was last actively triggered
-        now:              current time
-
-    Returns:
-        (is_active, clip_level, new_last_active_time)
-        where:
-          is_active:  bool — should the CLIP indicator be visible
-          clip_level: 0.0-1.0 — color interpolation (0=yellow, 1=red)
-          new_last_active_time: updated timestamp
+    Returns: (is_active, clip_level, new_last_active_time)
+      is_active:  bool — should CLIP indicator be visible
+      clip_level: 0.0-1.0 color interpolation (0=yellow, 1=red)
+      new_last_active_time: updated timestamp
     """
-    warn_db = _cfg.METER_CLIP_WARN_DB
-    crit_db = _cfg.METER_CLIP_CRITICAL_DB
+    warn_db = cfg.METER_CLIP_WARN_DB
+    crit_db = cfg.METER_CLIP_CRITICAL_DB
 
     if display_db >= warn_db:
-        # Level is above warning threshold — CLIP is active
         if crit_db > warn_db:
-            # Interpolate between warn and critical
             fraction = (display_db - warn_db) / (crit_db - warn_db)
             clip_level = max(0.0, min(1.0, fraction))
         else:
             clip_level = 1.0
-
         return True, clip_level, now
 
     elif was_active:
-        # Level dropped below threshold — check fadeout
         elapsed_since_active = now - last_active_time
-        if elapsed_since_active < _cfg.METER_CLIP_FADEOUT_SECONDS:
-            # Still in fadeout period — fade clip_level toward 0
-            fade_fraction = elapsed_since_active / _cfg.METER_CLIP_FADEOUT_SECONDS
+        if elapsed_since_active < cfg.METER_CLIP_FADEOUT_SECONDS:
+            fade_fraction = elapsed_since_active / cfg.METER_CLIP_FADEOUT_SECONDS
             clip_level = max(0.0, 1.0 - fade_fraction)
             return True, clip_level, last_active_time
         else:
-            # Fadeout complete — turn off
             return False, 0.0, last_active_time
 
     else:
-        # Not active, level is below threshold
         return False, 0.0, last_active_time
 
 
 def should_clip_flicker(clip_level, now):
     """
-    Determine whether the CLIP indicator should be in its "on" or "off"
-    flicker phase. Only flickers when clip_level is above a threshold
-    (when approaching or exceeding the critical zone).
+    Whether the CLIP indicator should be in its bright phase this frame.
 
-    Flicker rate is cfg.METER_CLIP_FLICKER_HZ (default 4 Hz = 250ms cycle).
+    Only flickers when clip_level >= 0.5 (approaching critical threshold).
+    Below 0.5: solid on (warning zone, no flicker).
+    At/above 0.5: square-wave flicker at cfg.METER_CLIP_FLICKER_HZ.
 
     Args:
         clip_level: 0.0-1.0 from compute_clip_state
-        now:        current time
+        now:        current time (time.perf_counter())
 
-    Returns:
-        True if the CLIP indicator should be BRIGHT this frame,
-        False if it should be DIM (or not flickering at all).
+    Returns: True = bright this frame, False = dim this frame
     """
-    # Only flicker when clip_level is significant (above 0.5 = approaching critical)
     if clip_level < 0.5:
-        # Below midpoint — solid on, no flicker
         return True
 
-    # Above midpoint — flicker at configured rate
-    hz = _cfg.METER_CLIP_FLICKER_HZ
+    hz = cfg.METER_CLIP_FLICKER_HZ
     if hz <= 0:
         return True
 
     cycle_s = 1.0 / hz
     position_in_cycle = (now % cycle_s) / cycle_s
-
-    # Square wave: on for first half of cycle, off for second half
     return position_in_cycle < 0.5
 
 
@@ -542,36 +694,29 @@ def clip_level_to_color(clip_level):
     """
     Convert clip_level (0.0 to 1.0) to an RGB hex color string.
 
-    Smooth gradient:
+    Smooth gradient through three stops:
       0.0 → yellow   (#f4d22b)
-      0.3 → orange   (#f4962b)
-      0.7 → red-orange (#ee4422)
+      0.5 → orange   (#ff6c2c)
       1.0 → red      (#ff3b30)
 
-    Uses linear interpolation in RGB space.
+    Linear interpolation in RGB space between stops.
 
     Args:
         clip_level: 0.0 (warning/yellow) to 1.0 (critical/red)
 
-    Returns:
-        hex color string like "#ff6c2c"
+    Returns: hex color string like "#ff6c2c"
     """
-    # Define the gradient stops
     if clip_level <= 0.0:
-        return "#f4d22b"  # yellow
+        return "#f4d22b"
     elif clip_level >= 1.0:
-        return "#ff3b30"  # red
+        return "#ff3b30"
 
-    # Smooth interpolation through orange
-    # Yellow (#f4d22b) → Orange (#ff6c2c) → Red (#ff3b30)
     if clip_level < 0.5:
-        # Yellow to orange (first half)
         t = clip_level / 0.5
         r = int(0xf4 + (0xff - 0xf4) * t)
         g = int(0xd2 + (0x6c - 0xd2) * t)
         b = int(0x2b + (0x2c - 0x2b) * t)
     else:
-        # Orange to red (second half)
         t = (clip_level - 0.5) / 0.5
         r = int(0xff + (0xff - 0xff) * t)
         g = int(0x6c + (0x3b - 0x6c) * t)
@@ -586,71 +731,121 @@ def clip_level_to_color(clip_level):
 
 def display_db_to_segment(display_db, total_segments=15, db_min=-30.0, db_max=12.0):
     """
-    Convert display dB to a segment index (0 = bottom, total_segments-1 = top).
+    Convert display dB to a lit segment count (0 = bottom, total_segments = full).
 
-    The meter has 15 segments covering -30 dB to +12 dB (3 dB each):
-      segment 0  = -30 dB (bottom, green)
-      segment 7  = -9 dB
-      segment 10 = 0 dB (orange, unity)
-      segment 14 = +12 dB (top, red)
+    The 15-segment meter covers -30 dB to +12 dB (3 dB per segment).
 
-    Returns the number of segments that should be LIT (0 to total_segments).
+    Returns: int number of segments that should be lit (0 to total_segments)
     """
     if display_db <= db_min:
         return 0
     if display_db >= db_max:
         return total_segments
-
     fraction = (display_db - db_min) / (db_max - db_min)
     return int(fraction * total_segments)
 
 
 def segment_color(segment_index, total_segments=15):
     """
-    Returns the color for a given segment index in the DJM-900 meter.
+    Returns (on_color, off_color) for a given segment index in the DJM-900 meter.
 
-    Color zones (matching the reference image):
-      Segments 0-9   (bottom, -30 to -3 dB)  → yellow/green
-      Segments 10-12 (0 to +6 dB)            → orange
-      Segment 13     (+9 dB)                  → orange-red
-      Segment 14     (+12 dB, top)            → red
-
-    Returns: (on_color, off_color) tuple of hex strings.
+    Color zones (bottom to top, 15 segments, -30 to +12 dB):
+      Segments 0-9   (-30 to -3 dB)  → yellow-green
+      Segments 10-12 (0 to +6 dB)    → orange
+      Segment 13     (+9 dB)          → orange-red
+      Segment 14     (+12 dB, top)    → red
     """
     if segment_index >= 14:
-        # Top segment — red
         return "#ee2222", "#1e0c0c"
     elif segment_index >= 13:
-        # Near-top — orange-red
         return "#ee6622", "#1e120c"
     elif segment_index >= 10:
-        # Orange zone (0 to +6 dB)
         return "#eeaa22", "#1e1a0c"
     else:
-        # Yellow-green zone (-30 to -3 dB)
         return "#88cc22", "#0c1e0c"
-        
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BUILD B PHASE 4 — DJM-900 METER + TRIM KNOB + ROUNDED RECT HELPER
+#  ROUNDED RECTANGLE HELPER
 #
-#  These functions are DEFINED here but NOT CALLED yet.
-#  Step 2 (builder.py) creates the canvas widgets.
-#  Step 3 (updater.py) calls these functions to draw on them.
+#  Defined BEFORE draw_djm_meter (which calls it) so the code reads
+#  top-to-bottom in dependency order.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _rounded_rect(canvas, x1, y1, x2, y2, radius=3, fill="#000000", outline=""):
+    """
+    Draw a rectangle with rounded corners using overlapping primitives.
+
+    Tkinter's canvas has no native rounded-rect, so we simulate it with:
+      - 2 overlapping rectangles (horizontal and vertical main bodies)
+      - 4 ovals at the corners
+      - Optional outline arcs and lines if outline != ""
+
+    This creates (6 + optional 8) = up to 14 canvas items per call.
+    Callers (draw_djm_meter) should cache the parent canvas output
+    to avoid recreating these on every frame.
+    """
+    r = min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2)
+    if r < 1:
+        canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=0)
+        return
+
+    # Main fill bodies
+    canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline="", width=0)
+    canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=fill, outline="", width=0)
+
+    # Corner ovals
+    canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r, fill=fill, outline="", width=0)
+    canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r, fill=fill, outline="", width=0)
+    canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2, fill=fill, outline="", width=0)
+    canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2, fill=fill, outline="", width=0)
+
+    if outline:
+        canvas.create_arc(x1, y1, x1 + 2*r, y1 + 2*r,
+                          start=90, extent=90, style="arc", outline=outline, width=1)
+        canvas.create_arc(x2 - 2*r, y1, x2, y1 + 2*r,
+                          start=0, extent=90, style="arc", outline=outline, width=1)
+        canvas.create_arc(x1, y2 - 2*r, x1 + 2*r, y2,
+                          start=180, extent=90, style="arc", outline=outline, width=1)
+        canvas.create_arc(x2 - 2*r, y2 - 2*r, x2, y2,
+                          start=270, extent=90, style="arc", outline=outline, width=1)
+        canvas.create_line(x1 + r, y1, x2 - r, y1, fill=outline, width=1)
+        canvas.create_line(x1 + r, y2, x2 - r, y2, fill=outline, width=1)
+        canvas.create_line(x1, y1 + r, x1, y2 - r, fill=outline, width=1)
+        canvas.create_line(x2, y1 + r, x2, y2 - r, fill=outline, width=1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  BUILD B PHASE 4 — DJM-900 NXS2 METER (22 segments, CLIP indicator)
 # ═══════════════════════════════════════════════════════════════════════════
 
 _djm_meter_cache = {}
 
 def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_flicker_on):
     """
-    Draw DJM-900 NXS2 style channel meter:
-      - 22 LED segments from -30 dB to +12 dB
-      - Each LED has a brighter center glow (3-stripe rendering)
-      - Wide black gaps between LEDs
-      - Rounded corners via _rounded_rect helper
-      - dB labels precisely positioned on the left
-      - CLIP indicator box at top with 2-stage color
-      - Warm desaturated color palette matching DJM-900
+    Draw DJM-900 NXS2 style channel meter.
+
+    Layout (top to bottom):
+      CLIP indicator box  (16px high)
+      8px gap
+      22 LED segments     (from -30 dB at bottom to +12 dB at top)
+      dB labels           (on the left side, 20px wide)
+
+    Each LED is rendered as 3 horizontal stripes:
+      top stripe:    edge color (darker)
+      center stripe: bright color (lighter)
+      bottom stripe: edge color (darker)
+    This simulates the center-glow of real LED segments.
+
+    Warm desaturated color palette (matches DJM-900 reference image):
+      Bottom (green-yellow) → Middle (yellow-orange) → Top (red)
+
+    Args:
+        smoothed_db:      ballistics-smoothed display dB for lit segments
+        peak_db:          held peak dB for the peak indicator segment
+        clip_active:      bool — show CLIP indicator
+        clip_level:       0.0-1.0 color intensity of CLIP
+        clip_flicker_on:  bool — CLIP bright phase (from should_clip_flicker)
     """
     cache_key = (
         round(smoothed_db, 1),
@@ -669,57 +864,58 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
     h = int(canvas['height'])
 
     # Layout constants
-    label_width = 20
-    led_left = label_width + 3
-    led_right = led_left + 8
+    label_width = 20          # width reserved for dB labels on left
+    led_left  = label_width + 3
+    led_right = led_left + 8  # LED bar is 8px wide
 
-    # CLIP box
-    clip_h = 16
-    clip_top = 2
+    # CLIP box geometry
+    clip_h      = 16
+    clip_top    = 2
     clip_bottom = clip_top + clip_h
-    clip_left = led_left - 2
-    clip_right = w - 2
+    clip_left   = led_left - 2
+    clip_right  = w - 2
 
-    # Gap between CLIP and meter
+    # Gap between CLIP box and top of meter segments
     clip_to_meter_gap = 8
 
-    # Meter segments
-    total_segs = 22
-    seg_gap = 5
-    meter_top = clip_bottom + clip_to_meter_gap
+    # Meter segment geometry
+    total_segs  = 22
+    seg_gap     = 5           # pixels between LED segments
+    meter_top    = clip_bottom + clip_to_meter_gap
     meter_bottom = h - 4
-    meter_h_px = meter_bottom - meter_top
+    meter_h_px   = meter_bottom - meter_top
     seg_h = max(3.0, (meter_h_px - (total_segs - 1) * seg_gap) / total_segs)
 
     # dB range
-    db_min = -30.0
-    db_max = 12.0
+    db_min   = -30.0
+    db_max   = 12.0
     db_range = db_max - db_min
 
-    # ── CLIP indicator ──
+    # ── CLIP indicator ──────────────────────────────────────────────────
     if clip_active:
         if clip_flicker_on:
-            clip_fill = clip_level_to_color(clip_level)
-            clip_outline = "#cc2222"
-            clip_text_color = "#ffffff"
+            clip_fill        = clip_level_to_color(clip_level)
+            clip_outline     = "#cc2222"
+            clip_text_color  = "#ffffff"
         else:
-            clip_fill = "#1a0808"
-            clip_outline = "#552222"
-            clip_text_color = "#553333"
+            clip_fill        = "#1a0808"
+            clip_outline     = "#552222"
+            clip_text_color  = "#553333"
     else:
-        clip_fill = "#0d0d0d"
-        clip_outline = "#2a2a2a"
+        clip_fill       = "#0d0d0d"
+        clip_outline    = "#2a2a2a"
         clip_text_color = "#2a2a2a"
 
     _rounded_rect(canvas, clip_left, clip_top, clip_right, clip_bottom,
                   radius=3, fill=clip_fill, outline=clip_outline)
     canvas.create_text(
-        (clip_left + clip_right) // 2, (clip_top + clip_bottom) // 2,
+        (clip_left + clip_right) // 2,
+        (clip_top + clip_bottom) // 2,
         text="CLIP", fill=clip_text_color,
         font=("Segoe UI", 7, "bold")
     )
 
-    # ── How many segments lit ──
+    # ── Lit segment count ───────────────────────────────────────────────
     if smoothed_db <= db_min:
         lit = 0
     elif smoothed_db >= db_max:
@@ -727,7 +923,7 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
     else:
         lit = int(((smoothed_db - db_min) / db_range) * total_segs)
 
-    # Peak segment
+    # ── Peak segment index ──────────────────────────────────────────────
     if peak_db <= db_min:
         peak_seg = -1
     elif peak_db >= db_max:
@@ -735,30 +931,40 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
     else:
         peak_seg = int(((peak_db - db_min) / db_range) * total_segs) - 1
 
-    # ── Color palette ──
+    # ── Segment color palette ───────────────────────────────────────────
     def get_seg_colors(seg_index):
+        """
+        Returns (on_color, off_color, bright_color) for segment seg_index.
+
+        Warm desaturated gradient from green-yellow (bottom) to red (top).
+        bright_color is on_color amplified by 1.4× for the center stripe.
+
+        This is an inner function because it closes over total_segs (a local
+        constant). It is not a module-level function because it would need
+        total_segs passed as a parameter, adding noise at every call site.
+        """
         frac = seg_index / (total_segs - 1) if total_segs > 1 else 0
 
         if frac >= 0.91:
-            on_r, on_g, on_b = 0xcc, 0x22, 0x22
+            on_r, on_g, on_b   = 0xcc, 0x22, 0x22
             off_r, off_g, off_b = 0x14, 0x06, 0x06
         elif frac >= 0.82:
-            on_r, on_g, on_b = 0xbb, 0x55, 0x22
+            on_r, on_g, on_b   = 0xbb, 0x55, 0x22
             off_r, off_g, off_b = 0x14, 0x0a, 0x06
         elif frac >= 0.73:
-            on_r, on_g, on_b = 0xaa, 0x77, 0x22
+            on_r, on_g, on_b   = 0xaa, 0x77, 0x22
             off_r, off_g, off_b = 0x12, 0x0e, 0x06
         elif frac >= 0.64:
-            on_r, on_g, on_b = 0x99, 0x88, 0x22
+            on_r, on_g, on_b   = 0x99, 0x88, 0x22
             off_r, off_g, off_b = 0x10, 0x0e, 0x06
         elif frac >= 0.45:
-            on_r, on_g, on_b = 0x77, 0x88, 0x22
+            on_r, on_g, on_b   = 0x77, 0x88, 0x22
             off_r, off_g, off_b = 0x0c, 0x0e, 0x06
         else:
-            on_r, on_g, on_b = 0x55, 0x77, 0x28
+            on_r, on_g, on_b   = 0x55, 0x77, 0x28
             off_r, off_g, off_b = 0x08, 0x0c, 0x06
 
-        on_color = f"#{on_r:02x}{on_g:02x}{on_b:02x}"
+        on_color  = f"#{on_r:02x}{on_g:02x}{on_b:02x}"
         off_color = f"#{off_r:02x}{off_g:02x}{off_b:02x}"
 
         bright_r = min(255, int(on_r * 1.4))
@@ -768,32 +974,33 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
 
         return on_color, off_color, bright_color
 
-    # ── Draw LED segments ──
+    # ── Draw LED segments (bottom = segment 0, top = segment 21) ───────
     for i in range(total_segs):
         seg_bottom = meter_bottom - i * (seg_h + seg_gap)
-        seg_top = seg_bottom - seg_h
+        seg_top    = seg_bottom - seg_h
 
         on_color, off_color, bright_color = get_seg_colors(i)
 
-        is_lit = (i < lit)
+        is_lit  = (i < lit)
         is_peak = (i == peak_seg and peak_db > db_min)
 
         if is_peak:
-            edge_color = "#bbbbbb"
+            edge_color   = "#bbbbbb"
             center_color = "#ffffff"
         elif is_lit:
-            edge_color = on_color
+            edge_color   = on_color
             center_color = bright_color
         else:
-            edge_color = off_color
+            edge_color   = off_color
             center_color = off_color
 
+        # Three-stripe LED rendering
         third = max(1.0, seg_h / 3.0)
 
         _rounded_rect(canvas,
-                       led_left, seg_top,
-                       led_right, seg_top + third,
-                       radius=2, fill=edge_color)
+                      led_left, seg_top,
+                      led_right, seg_top + third,
+                      radius=2, fill=edge_color)
 
         canvas.create_rectangle(
             led_left, seg_top + third,
@@ -802,11 +1009,11 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
         )
 
         _rounded_rect(canvas,
-                       led_left, seg_bottom - third,
-                       led_right, seg_bottom,
-                       radius=2, fill=edge_color)
+                      led_left, seg_bottom - third,
+                      led_right, seg_bottom,
+                      radius=2, fill=edge_color)
 
-    # ── dB labels ──
+    # ── dB labels on the left ───────────────────────────────────────────
     db_labels = [
         (12, "+12"), (9, "+9"), (6, "+6"), (3, "+3"), (0, "0"),
         (-3, "-3"), (-6, "-6"), (-9, "-9"), (-12, "-12"),
@@ -816,8 +1023,7 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
 
     for db_val, label_text in db_labels:
         frac = (db_val - db_min) / db_range
-        y = meter_bottom - frac * meter_h_px
-
+        y    = meter_bottom - frac * meter_h_px
         canvas.create_text(
             label_width - 1, y,
             text=label_text,
@@ -833,136 +1039,3 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
         font=("Segoe UI", 5, "bold"),
         anchor="e"
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  TRIM KNOB — same metallic style but -∞/0/+9 range labels
-# ═══════════════════════════════════════════════════════════════════════════
-
-_trim_knob_cache = {}
-
-def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
-    """
-    TRIM knob with -∞/0/+9 labels (different from EQ's -∞/0/+6).
-    Same metallic DJM-900 style as draw_eq_knob.
-    """
-    cache_key = (round(visual_pos, 3), selected, armed)
-    if _trim_knob_cache.get(band_idx) == cache_key:
-        return
-    _trim_knob_cache[band_idx] = cache_key
-
-    canvas.delete("all")
-
-    w = int(canvas['width'])
-    h = int(canvas['height'])
-    cx = w // 2
-    cy = h // 2
-
-    r_outer = min(w, h) // 2 - 10
-    r_ring  = r_outer - 2
-    r_body1 = r_outer - 7
-    r_body2 = r_outer - 11
-    r_body3 = r_outer - 15
-    r_cap   = max(3, r_outer - 20)
-
-    canvas.create_oval(cx - r_outer, cy - r_outer, cx + r_outer, cy + r_outer,
-                       fill=EQ_KNOB_RING_OUTER, outline=EQ_KNOB_RING_DARK, width=1)
-
-    canvas.create_arc(cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring,
-                      start=225, extent=-270, style="arc", outline=EQ_KNOB_ARC_BG, width=2)
-
-    if abs(visual_pos - 0.5) > 0.005:
-        if visual_pos < 0.5:
-            extent = (0.5 - visual_pos) * 270
-            start_angle = 90
-        else:
-            extent = -(visual_pos - 0.5) * 270
-            start_angle = 90
-        canvas.create_arc(cx - r_ring, cy - r_ring, cx + r_ring, cy + r_ring,
-                          start=start_angle, extent=extent,
-                          style="arc", outline=EQ_KNOB_ARC_ACTIVE, width=2)
-
-    for tick_angle_deg in range(225, -46, -30):
-        tick_rad = math.radians(tick_angle_deg)
-        ox = cx + (r_ring + 1) * math.cos(tick_rad)
-        oy = cy - (r_ring + 1) * math.sin(tick_rad)
-        ix = cx + (r_ring - 2) * math.cos(tick_rad)
-        iy = cy - (r_ring - 2) * math.sin(tick_rad)
-        canvas.create_line(ix, iy, ox, oy, fill=EQ_KNOB_BODY_LIGHT, width=1)
-
-    canvas.create_line(cx, cy - (r_ring + 2), cx, cy - (r_ring - 3),
-                       fill=EQ_KNOB_DETENT, width=2)
-
-    label_r = r_outer + 6
-    lx = cx + label_r * math.cos(math.radians(225))
-    ly = cy - label_r * math.sin(math.radians(225))
-    canvas.create_text(lx, ly, text="−∞", fill=EQ_KNOB_BODY_LIGHT,
-                       font=("Segoe UI", 6, "bold"))
-    canvas.create_text(cx, cy - label_r, text="0", fill=EQ_KNOB_DETENT,
-                       font=("Segoe UI", 6, "bold"))
-    rx = cx + label_r * math.cos(math.radians(-45))
-    ry = cy - label_r * math.sin(math.radians(-45))
-    canvas.create_text(rx, ry, text="+9", fill=EQ_KNOB_BODY_LIGHT,
-                       font=("Segoe UI", 6, "bold"))
-
-    canvas.create_oval(cx - r_body1, cy - r_body1, cx + r_body1, cy + r_body1,
-                       fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1)
-    canvas.create_oval(cx - r_body2, cy - r_body2, cx + r_body2, cy + r_body2,
-                       fill=EQ_KNOB_BODY_MID, outline="")
-
-    if armed:
-        canvas.create_oval(cx - r_body2 - 1, cy - r_body2 - 1,
-                           cx + r_body2 + 1, cy + r_body2 + 1,
-                           outline=EQ_LABEL_ARMED, width=2)
-    elif selected:
-        canvas.create_oval(cx - r_body2 - 1, cy - r_body2 - 1,
-                           cx + r_body2 + 1, cy + r_body2 + 1,
-                           outline=EQ_LABEL_SELECTED, width=1)
-
-    canvas.create_oval(cx - r_body3, cy - r_body3, cx + r_body3, cy + r_body3,
-                       fill=EQ_KNOB_BODY_LIGHT, outline="")
-
-    angle_deg = 225 - 270 * visual_pos
-    angle_rad = math.radians(angle_deg)
-    lix = cx + (r_cap + 1) * math.cos(angle_rad)
-    liy = cy - (r_cap + 1) * math.sin(angle_rad)
-    lox = cx + (r_body1 - 1) * math.cos(angle_rad)
-    loy = cy - (r_body1 - 1) * math.sin(angle_rad)
-    canvas.create_line(lix, liy, lox, loy, fill=EQ_KNOB_INDICATOR, width=3)
-
-    canvas.create_oval(cx - r_cap, cy - r_cap, cx + r_cap, cy + r_cap,
-                       fill=EQ_KNOB_BODY_DARK, outline=EQ_KNOB_BODY_RIM, width=1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  ROUNDED RECTANGLE HELPER (used by draw_djm_meter and CLIP box)
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _rounded_rect(canvas, x1, y1, x2, y2, radius=3, fill="#000000", outline=""):
-    """Draw a rectangle with rounded corners using overlapping shapes."""
-    r = min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2)
-    if r < 1:
-        canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=0)
-        return
-
-    canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline="", width=0)
-    canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=fill, outline="", width=0)
-
-    canvas.create_oval(x1, y1, x1 + 2*r, y1 + 2*r, fill=fill, outline="", width=0)
-    canvas.create_oval(x2 - 2*r, y1, x2, y1 + 2*r, fill=fill, outline="", width=0)
-    canvas.create_oval(x1, y2 - 2*r, x1 + 2*r, y2, fill=fill, outline="", width=0)
-    canvas.create_oval(x2 - 2*r, y2 - 2*r, x2, y2, fill=fill, outline="", width=0)
-
-    if outline:
-        canvas.create_arc(x1, y1, x1 + 2*r, y1 + 2*r, start=90, extent=90,
-                          style="arc", outline=outline, width=1)
-        canvas.create_arc(x2 - 2*r, y1, x2, y1 + 2*r, start=0, extent=90,
-                          style="arc", outline=outline, width=1)
-        canvas.create_arc(x1, y2 - 2*r, x1 + 2*r, y2, start=180, extent=90,
-                          style="arc", outline=outline, width=1)
-        canvas.create_arc(x2 - 2*r, y2 - 2*r, x2, y2, start=270, extent=90,
-                          style="arc", outline=outline, width=1)
-        canvas.create_line(x1 + r, y1, x2 - r, y1, fill=outline, width=1)
-        canvas.create_line(x1 + r, y2, x2 - r, y2, fill=outline, width=1)
-        canvas.create_line(x1, y1 + r, x1, y2 - r, fill=outline, width=1)
-        canvas.create_line(x2, y1 + r, x2, y2 - r, fill=outline, width=1)

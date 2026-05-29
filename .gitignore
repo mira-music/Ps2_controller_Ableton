@@ -22,9 +22,6 @@ env/
 Thumbs.db
 desktop.ini
 
-# Logs
-*.log
-
 # Log files (generated at runtime)
 logs/
 *.log
@@ -36,11 +33,11 @@ logs/
 # State persistence (if we add it later)
 .fxmachine_state.json
 
-# Build artifacts (for when we make .exe later)
+# Build artifacts
 build/
 dist/
 
-#My one Shoot Script
+# My one-shot script (legacy monolith — not tracked)
 v9_11.py
 
 # Config folder — track template, ignore user files

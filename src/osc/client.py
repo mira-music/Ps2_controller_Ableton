@@ -2,13 +2,6 @@
 ================================================================================
   src/osc/client.py — OSC Send Functions
 ================================================================================
-  All outbound OSC calls to Ableton (via AbletonOSC). Includes:
-    - Transport (play, stop, position queries)
-    - Track/scene navigation
-    - FX rack parameter queries + writes + listeners
-    - EQ rack parameter queries + writes + listeners
-    - EQ track output meter listeners (v9.10)
-================================================================================
 """
 
 import time
@@ -23,17 +16,11 @@ from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  SETUP
-# ═══════════════════════════════════════════════════════════════════════════
 
 def setup_osc():
     st.osc = udp_client.SimpleUDPClient(OSC_HOST, OSC_SEND_PORT)
     log.info(f"OSC sender ready → {OSC_HOST}:{OSC_SEND_PORT}")
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  NAVIGATION + VIEW
-# ═══════════════════════════════════════════════════════════════════════════
 
 def osc_select_track(track_idx):
     st.osc.send_message("/live/view/set/selected_track", [track_idx])
@@ -44,10 +31,6 @@ def osc_update_view():
         scene = st.state["scene"]
     st.osc.send_message("/live/view/set/selected_track", [track])
     st.osc.send_message("/live/view/set/selected_scene", [scene])
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  CLIP / SCENE / TRACK ACTIONS
-# ═══════════════════════════════════════════════════════════════════════════
 
 def osc_launch_clip():
     with st._lock:
@@ -81,19 +64,11 @@ def osc_set_volume(vol):
         track = st.state["track"]
     st.osc.send_message("/live/track/set/volume", [track, vol])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  TRANSPORT
-# ═══════════════════════════════════════════════════════════════════════════
-
 def osc_play():
     st.osc.send_message("/live/song/start_playing", [])
 
 def osc_stop():
     st.osc.send_message("/live/song/stop_playing", [])
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  POSITION QUERIES
-# ═══════════════════════════════════════════════════════════════════════════
 
 def osc_query_position():
     with st._lock:
@@ -106,14 +81,22 @@ def osc_query_position():
     st.osc.send_message("/live/clip/get/color",   [track, scene])
 
 def schedule_position_query():
-    st.state["_query_requested_at"] = time.perf_counter()
+    """
+    Schedule a deferred position query. Acquires lock for consistency
+    with the rest of the codebase's locking discipline.
+    """
+    with st._lock:
+        st.state["_query_requested_at"] = time.perf_counter()
 
 def osc_query_group_previews():
     with st._lock:
         groups = list(st.state["groups"])
         gc     = st.state["group_cursor"]
+
+    # Guard: if no groups exist, nothing to preview
     if not groups:
         return
+
     if gc + 1 < len(groups):
         st.osc.send_message("/live/track/get/name", [groups[gc + 1]["track_index"]])
     if gc - 1 >= 0:
@@ -125,9 +108,8 @@ def osc_query_track_color(track_idx):
 def osc_query_scene_color(scene_idx):
     st.osc.send_message("/live/scene/get/color", [scene_idx])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FX RACK QUERIES
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── FX RACK QUERIES ──────────────────────────────────────────────────────
 
 def osc_query_fx_macro_names():
     with st._lock:
@@ -162,22 +144,26 @@ def osc_query_fx_macro_maxs():
                         [track_idx, FX_RACK_DEVICE_INDEX])
 
 def osc_query_fx_macro_value_strings():
+    """
+    Query display strings for all discovered FX macros.
+    Uses fx_macro_param_ids (was incorrectly using eq_macro_param_ids).
+    Snapshot all needed state in one lock acquisition.
+    """
     with st._lock:
         track_idx = st.state["fx_track_index"]
-        param_ids = list(st.state["fx_macro_param_ids"])
+        param_ids = list(st.state["fx_macro_param_ids"])   # FX, not EQ
+        names     = list(st.state["fx_macro_names"])
         ready     = st.state["fx_ready"]
     if track_idx < 0 or not ready:
         return
-    for slot, pid in enumerate(param_ids):
-        with st._lock:
-            if not st.state["fx_macro_names"][slot]:
-                continue
+    for slot, (pid, name) in enumerate(zip(param_ids, names)):
+        if not name:
+            continue
         st.osc.send_message("/live/device/get/parameter/value_string",
                             [track_idx, FX_RACK_DEVICE_INDEX, pid])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FX LISTENERS
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── FX LISTENERS ─────────────────────────────────────────────────────────
 
 def osc_register_fx_listeners():
     with st._lock:
@@ -199,6 +185,8 @@ def osc_register_fx_listeners():
     log.info(f"FX listeners registered: {count} listeners armed")
 
 def osc_stop_fx_listeners():
+    if st.osc is None:
+        return
     with st._lock:
         track_idx = st.state["fx_track_index"]
         param_ids = list(st.state["fx_macro_param_ids"])
@@ -218,11 +206,14 @@ def osc_stop_fx_listeners():
     st.FX_LISTEN_REGISTERED = False
     log.info("FX listeners stopped")
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FX WRITES
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── FX WRITES ────────────────────────────────────────────────────────────
 
 def osc_set_fx_macro(slot, value):
+    """
+    Write an FX macro value to Ableton.
+    Guards: track_idx >= 0, slot in range, param_id >= 0 (not yet discovered).
+    """
     with st._lock:
         track_idx = st.state["fx_track_index"]
         param_ids = list(st.state["fx_macro_param_ids"])
@@ -231,12 +222,14 @@ def osc_set_fx_macro(slot, value):
     if slot < 0 or slot >= len(param_ids):
         return
     param_id = param_ids[slot]
+    # Guard: param_id -1 means macro not yet discovered — don't send garbage
+    if param_id < 0:
+        return
     st.osc.send_message("/live/device/set/parameter/value",
                         [track_idx, FX_RACK_DEVICE_INDEX, param_id, float(value)])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EQ RACK QUERIES
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── EQ RACK QUERIES ──────────────────────────────────────────────────────
 
 def osc_query_eq_macro_names():
     with st._lock:
@@ -271,22 +264,22 @@ def osc_query_eq_macro_maxs():
                         [track_idx, EQ_RACK_DEVICE_INDEX])
 
 def osc_query_eq_macro_value_strings():
+    """Single lock acquisition for all needed state."""
     with st._lock:
         track_idx = st.state["eq_track_index"]
         param_ids = list(st.state["eq_macro_param_ids"])
+        names     = list(st.state["eq_macro_names"])
         ready     = st.state["eq_ready"]
     if track_idx < 0 or not ready:
         return
-    for slot, pid in enumerate(param_ids):
-        with st._lock:
-            if not st.state["eq_macro_names"][slot]:
-                continue
+    for slot, (pid, name) in enumerate(zip(param_ids, names)):
+        if not name:
+            continue
         st.osc.send_message("/live/device/get/parameter/value_string",
                             [track_idx, EQ_RACK_DEVICE_INDEX, pid])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EQ LISTENERS
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── EQ LISTENERS ─────────────────────────────────────────────────────────
 
 def osc_register_eq_listeners():
     with st._lock:
@@ -308,6 +301,8 @@ def osc_register_eq_listeners():
     log.info(f"EQ listeners registered: {count} listeners armed")
 
 def osc_stop_eq_listeners():
+    if st.osc is None:
+        return
     with st._lock:
         track_idx = st.state["eq_track_index"]
         param_ids = list(st.state["eq_macro_param_ids"])
@@ -327,11 +322,14 @@ def osc_stop_eq_listeners():
     st.EQ_LISTEN_REGISTERED = False
     log.info("EQ listeners stopped")
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EQ WRITES
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── EQ WRITES ────────────────────────────────────────────────────────────
 
 def osc_set_eq_macro(slot, value):
+    """
+    Write an EQ macro value to Ableton.
+    Guards: track_idx >= 0, slot in range, param_id >= 0.
+    """
     with st._lock:
         track_idx = st.state["eq_track_index"]
         param_ids = list(st.state["eq_macro_param_ids"])
@@ -340,15 +338,16 @@ def osc_set_eq_macro(slot, value):
     if slot < 0 or slot >= len(param_ids):
         return
     param_id = param_ids[slot]
+    # Guard: param_id -1 means macro not yet discovered
+    if param_id < 0:
+        return
     st.osc.send_message("/live/device/set/parameter/value",
                         [track_idx, EQ_RACK_DEVICE_INDEX, param_id, float(value)])
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EQ TRACK OUTPUT METER (DJM channel meter)
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── EQ TRACK OUTPUT METER ────────────────────────────────────────────────
 
 def osc_register_eq_meter_listener():
-    """Register listeners for EQ track output meter (L+R audio peak)."""
     with st._lock:
         track_idx = st.state["eq_track_index"]
     if track_idx < 0:
@@ -361,6 +360,8 @@ def osc_register_eq_meter_listener():
         log.warning(f"Meter listener register failed: {e}")
 
 def osc_stop_eq_meter_listener():
+    if st.osc is None:
+        return
     with st._lock:
         track_idx = st.state["eq_track_index"]
     if track_idx < 0:

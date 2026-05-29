@@ -12,12 +12,14 @@
   Build B changes:
     - EQ macro arrays expanded from 3 to 4 entries (added TRIM at slot 3)
     - Added TRIM-specific encoder state
+    - Added missing volume control and R3 mute state keys (_vol_last_sent,
+      _vol_last_value, _r3_last_click)
 ================================================================================
 """
 
 import threading
 from src.config import (
-    EQ_MACRO_COUNT,      # Build B: now 4
+    EQ_MACRO_COUNT,
     EQ_NEUTRAL_MACRO,
     EQ_SLOT_MID,
     ABLETON_UNITY,
@@ -164,7 +166,7 @@ state = {
     "clip_level":           0.0,
     "clip_last_active_time": 0.0,
 
-        # ─── UI flash + last action ───
+    # ─── UI flash + last action ───
     "last_action":      "Starting up…",
     "flash_scene":      False,
     "flash_track":      False,
@@ -173,15 +175,27 @@ state = {
     "flash_until":      0.0,
 
     # ─── Notification slot (Build B Phase 3) ───
-    # A dedicated UI area for transient warnings, separate from last_action.
-    # Severity: "info" (yellow), "warning" (orange), "critical" (red)
-    "notification_text":     "",        # message to display (empty = hidden)
-    "notification_severity": "info",    # "info", "warning", or "critical"
-    "notification_time":     0.0,       # when the notification was pushed
-    "notification_duration": 3.0,       # how long to show (seconds)
+    "notification_text":     "",
+    "notification_severity": "info",
+    "notification_time":     0.0,
+    "notification_duration": 3.0,
+
+    # ─── Volume control state (SELECT + R-stick) ───
+    # These were previously missing, causing KeyError on first volume use.
+    "_vol_last_sent":   0.0,   # timestamp of last volume OSC write
+    "_vol_last_value":  ABLETON_UNITY,  # value at last write (for epsilon culling)
+
+    # ─── R3 double-click mute (SELECT + R3) ───
+    # Previously missing, causing KeyError on first mute toggle.
+    "_r3_last_click":   0.0,   # timestamp of last R3 click (0.0 = never)
 
     # ─── Polling timing ───
     "_query_requested_at": 0.0,
+
+    # ─── Shutdown flag (explicit signal for clean loop exit) ───
+    # More reliable than checking _osc_server is None, which is ambiguous
+    # when OSC server fails to start during startup.
+    "_shutting_down":   False,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════

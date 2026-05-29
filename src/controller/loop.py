@@ -2,19 +2,6 @@
 ================================================================================
   src/controller/loop.py — Main Controller Thread
 ================================================================================
-  Daemon thread (~125 Hz) that:
-    1. Reads pygame events (buttons, axes, device removed)
-    2. Dispatches button events to handlers
-    3. Reconciles ghost SELECT events
-    4. Routes right stick by modifier priority (L1 > SELECT > EQ > idle)
-    5. Left stick always drives navigation
-    6. D-pad routed by current layer
-    7. Sleeps 8ms → ~125 Hz polling rate
-
-  Error handling distinguishes:
-    - pygame.error "not initialized" → app is shutting down, exit cleanly
-    - All other errors → log and recover (reset controller state, sleep, retry)
-================================================================================
 """
 
 import time
@@ -32,15 +19,8 @@ from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  MODULE-LEVEL TIMING
-# ═══════════════════════════════════════════════════════════════════════════
-
 _axis_last_tick = 0.0
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  MAIN CONTROLLER LOOP
-# ═══════════════════════════════════════════════════════════════════════════
 
 def controller_loop():
     global _axis_last_tick
@@ -96,12 +76,6 @@ def controller_loop():
                 select_held = st.state["select_held"]
                 eq_mode = st.state["eq_mode_active"]
 
-            # Right-stick priority:
-            # 1. L1 → FX layer
-            # 2. SELECT → volume control
-            # 3. EQ mode → EQ control
-            # 4. Default → nothing
-
             if l1:
                 handle_axes_fx(ctrl, dt)
             else:
@@ -117,13 +91,12 @@ def controller_loop():
             pygame.time.wait(8)
 
         except pygame.error as e:
-            # pygame.error usually means the joystick was momentarily quit
-            # by a reprobe in another thread. Don't exit — recover by clearing
-            # the handle so the next loop iteration triggers a reprobe via the
-            # watchdog. Only exit if we detect a true shutdown.
             err_msg = str(e)
+            # Use the explicit shutdown flag rather than _osc_server is None.
+            # _osc_server is None is ambiguous: it's also None when the OSC
+            # server fails to start, which would cause premature loop exit.
             with st._lock:
-                shutting_down = (st._osc_server is None)
+                shutting_down = st.state["_shutting_down"]
             if shutting_down:
                 log.info(f"Controller loop exiting cleanly (shutdown): {err_msg}")
                 return

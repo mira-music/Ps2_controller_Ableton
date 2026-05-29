@@ -2,9 +2,6 @@
 ================================================================================
   src/helpers.py — Utility Functions
 ================================================================================
-  Stateless helpers used across multiple modules. Math, formatting,
-  smoothing, EQ-specific math helpers.
-================================================================================
 """
 
 import math
@@ -12,16 +9,12 @@ import time
 
 from src import state as st
 from src.config import (
-    # Architectural constants — never change at runtime
     EQ_MACRO_MIN, EQ_MACRO_MAX, EQ_NEUTRAL_MACRO,
 )
 from src.config_loader import cfg
-# ═══════════════════════════════════════════════════════════════════════════
-#  BASIC HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+
 
 def db_from_vol(vol):
-    """Convert Ableton's normalized volume (0-1) to dB string for display."""
     if vol <= 0:
         return "-∞ dB"
     db = 20 * math.log10(vol / cfg.ABLETON_UNITY)
@@ -49,11 +42,6 @@ def hybrid_curve(value):
     return (abs(value) ** 1.8) * (1.0 if value > 0 else -1.0)
 
 def smooth_axis(previous, current, factor=None):
-    """
-    Exponential smoothing on raw axis input.
-    Default factor comes from cfg.SMOOTHING_FACTOR (hot-reloadable).
-    Callers can override with a per-call factor (e.g. EQ uses its own).
-    """
     f = factor if factor is not None else cfg.SMOOTHING_FACTOR
     return previous * (1.0 - f) + current * f
 
@@ -72,9 +60,8 @@ def int_to_hex_color(color_int, fallback="#666666"):
         return fallback
     return f"#{color_int:06x}"
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  FX ACCELERATION
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── FX ACCELERATION ──────────────────────────────────────────────────────
 
 def reset_accel_state():
     with st._lock:
@@ -83,14 +70,6 @@ def reset_accel_state():
             st.state["_accel_last_dir"][k] = 0
 
 def compute_accel_multiplier(axis_key, current_dir, now):
-    """
-    Time-based acceleration multiplier for FX stick driving.
-    Holding the stick in one direction → speed ramps up over time.
-    
-    Reads from cfg (hot-reloadable):
-      cfg.FX_ACCEL_RAMP_S
-      cfg.FX_ACCEL_MAX_MULT
-    """
     with st._lock:
         last_dir = st.state["_accel_last_dir"][axis_key]
         since    = st.state["_accel_since"][axis_key]
@@ -110,64 +89,53 @@ def compute_accel_multiplier(axis_key, current_dir, now):
     mult = 1.0 + (elapsed / cfg.FX_ACCEL_RAMP_S)
     return min(mult, cfg.FX_ACCEL_MAX_MULT)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  EQ HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── EQ HELPERS ───────────────────────────────────────────────────────────
 
 def eq_visual_position(macro_value):
-    """
-    Convert macro value (0-127) to a visual knob position (0.0-1.0).
-    0.0 = far left (-inf dB), 0.5 = top (0 dB), 1.0 = far right (+6 dB).
-    """
+    """Convert macro value (0-127) to visual knob position (0.0-1.0)."""
     if macro_value <= EQ_NEUTRAL_MACRO:
         return (macro_value / EQ_NEUTRAL_MACRO) * 0.5
     else:
         boost_range = EQ_MACRO_MAX - EQ_NEUTRAL_MACRO
         return 0.5 + ((macro_value - EQ_NEUTRAL_MACRO) / boost_range) * 0.5
 
-def eq_encoder_delta(stick_value, dt):
+
+def eq_encoder_delta(stick_value, dt,
+                     dead_zone=None, curve_exp=None, sweep_seconds=None):
     """
     Convert stick deflection + frame dt → signed macro value delta.
-    
-    Reads from cfg (hot-reloadable):
-      cfg.EQ_AXIS_DEAD_ZONE
-      cfg.EQ_ENCODER_CURVE_EXP
-      cfg.EQ_SWEEP_SECONDS
+
+    Accepts optional override parameters so TRIM can reuse this function
+    with its own calibration values instead of duplicating the calculation.
+
+    Args:
+        stick_value:   raw stick position (-1.0 to +1.0)
+        dt:            frame time delta (seconds)
+        dead_zone:     override cfg.EQ_AXIS_DEAD_ZONE (None = use cfg)
+        curve_exp:     override cfg.EQ_ENCODER_CURVE_EXP (None = use cfg)
+        sweep_seconds: override cfg.EQ_SWEEP_SECONDS (None = use cfg)
     """
+    dz  = dead_zone     if dead_zone     is not None else cfg.EQ_AXIS_DEAD_ZONE
+    exp = curve_exp     if curve_exp     is not None else cfg.EQ_ENCODER_CURVE_EXP
+    sw  = sweep_seconds if sweep_seconds is not None else cfg.EQ_SWEEP_SECONDS
+
     abs_v = abs(stick_value)
-    if abs_v < cfg.EQ_AXIS_DEAD_ZONE:
+    if abs_v < dz:
         return 0.0
-    normalized = (abs_v - cfg.EQ_AXIS_DEAD_ZONE) / (1.0 - cfg.EQ_AXIS_DEAD_ZONE)
+    normalized = (abs_v - dz) / (1.0 - dz)
     normalized = clamp(normalized, 0.0, 1.0)
-    shaped = normalized ** cfg.EQ_ENCODER_CURVE_EXP
+    shaped = normalized ** exp
     macro_range = EQ_MACRO_MAX - EQ_MACRO_MIN
-    velocity = (macro_range / cfg.EQ_SWEEP_SECONDS) * shaped
+    velocity = (macro_range / sw) * shaped
     sign = 1.0 if stick_value > 0 else -1.0
     return velocity * sign * dt
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  NOTIFICATION SYSTEM (Build B Phase 3)
-# ═══════════════════════════════════════════════════════════════════════════
+
+# ── NOTIFICATION SYSTEM ──────────────────────────────────────────────────
 
 def push_notification(text, severity="info", duration=3.0):
-    """
-    Push a transient notification to the dedicated UI notification slot.
-
-    This is separate from state["last_action"] — notifications are for
-    important warnings that should be visible even when the action line
-    is showing something else.
-
-    Args:
-        text:     message to display
-        severity: "info" (yellow), "warning" (orange), "critical" (red)
-        duration: how long to show in seconds (default 3s)
-
-    Usage:
-        push_notification("⚠ Config has errors", "warning", 5.0)
-        push_notification("🔴 CLIPPING!", "critical", 2.0)
-        push_notification("✓ Config reloaded", "info", 2.0)
-    """
-    import time
+    """Push a transient notification to the dedicated UI notification slot."""
     with st._lock:
         st.state["notification_text"]     = text
         st.state["notification_severity"] = severity

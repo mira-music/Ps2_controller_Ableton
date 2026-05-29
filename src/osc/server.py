@@ -6,23 +6,19 @@
   Handlers update shared state. The Tkinter UI thread reads that state
   at 40 Hz to redraw.
 
-  Combined param handlers (on_combined_param_*) dispatch by track_id
-  to either FX or EQ subsystem.
+  IMPORTANT: Both FX and EQ single-param listeners share the same OSC
+  address (/live/device/get/parameter/value). pythonosc Dispatcher.map()
+  only allows one handler per address — second call overwrites the first.
+  We solve this with a single dispatching handler (on_param_value) that
+  routes internally by track_id.
 
   Build B: EQ rack now has 4 macros instead of 3 (Trim added at slot 3).
-
-  IMPORTANT: AbletonOSC's parameter responses are flat lists of values
-  in parameter-index order. The index in the list IS the param_id.
-  Example for names:
-    args = ('Macro 1', 'Filter Freq', 'Filter Mode', 'Filter Res', ...)
-    param_id 0 = 'Macro 1'      (the rack itself)
-    param_id 1 = 'Filter Freq'
-    param_id 2 = 'Filter Mode'
-    ...
 ================================================================================
 """
 
 import time
+import threading
+
 from src import state as st
 from src.config import (
     FX_RACK_DEVICE_INDEX, EQ_RACK_DEVICE_INDEX,
@@ -36,12 +32,15 @@ from src.log_setup import get_logger
 log = get_logger(__name__)
 
 # Known Ableton OSC errors to silently downgrade to DEBUG level
-# (these happen during normal navigation and don't indicate real problems)
 _IGNORED_ABLETON_ERROR_PATTERNS = [
     "Unknown OSC address: /live/device/start_listen/parameter/value_string",
     "'NoneType' object has no attribute 'name'",
     "'NoneType' object has no attribute 'color'",
 ]
+
+# Lock for ableton error throttle globals (these are written from the OSC
+# server thread which is ThreadingOSCUDPServer — multiple threads possible).
+_error_throttle_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -68,7 +67,6 @@ def on_scene_count(addr, *args):
     count = int(args[0])
     with st._lock:
         st.state["_real_scene_count"] = count
-        # Grow arrays if needed
         while len(st.ableton["all_scene_names"]) < count:
             st.ableton["all_scene_names"].append("")
         while len(st.ableton["all_scene_colors"]) < count:
@@ -103,7 +101,6 @@ def on_scene_name(addr, *args):
         while len(st.ableton["all_scene_names"]) <= idx:
             st.ableton["all_scene_names"].append("")
         st.ableton["all_scene_names"][idx] = name
-        # Live-update the current scene name if it changed
         if idx == st.state["scene"]:
             st.ableton["scene_name"] = name
 
@@ -150,7 +147,6 @@ def on_track_color(addr, *args):
         while len(st.ableton["all_track_colors"]) <= idx:
             st.ableton["all_track_colors"].append(0)
         st.ableton["all_track_colors"][idx] = color
-        # Track color of FX / EQ track also gets cached separately
         if idx == st.state["fx_track_index"]:
             st.ableton["fx_track_color"] = color
         if idx == st.state["eq_track_index"]:
@@ -179,7 +175,9 @@ def on_track_meter_left(addr, *args):
     except (ValueError, TypeError):
         return
     with st._lock:
-        if idx == st.state["eq_track_index"]:
+        eq_idx = st.state["eq_track_index"]
+        # Guard: idx must be non-negative and match the EQ track
+        if idx >= 0 and idx == eq_idx:
             st.state["eq_meter_left"] = level
 
 
@@ -192,7 +190,8 @@ def on_track_meter_right(addr, *args):
     except (ValueError, TypeError):
         return
     with st._lock:
-        if idx == st.state["eq_track_index"]:
+        eq_idx = st.state["eq_track_index"]
+        if idx >= 0 and idx == eq_idx:
             st.state["eq_meter_right"] = level
 
 
@@ -307,22 +306,9 @@ def on_combined_param_values(addr, *args):
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FX MACRO HANDLERS
-#  AbletonOSC sends a flat list of values in param-index order.
-#  The index in the list IS the param_id.
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _handle_fx_macro_names(args):
-    """
-    args = flat sequence of names in param-index order.
-    Example: ('Macro 1', 'Filter Freq', 'Filter Mode', ...)
-      param_id 0 → 'Macro 1' (the rack itself, ignored)
-      param_id 1 → 'Filter Freq'
-      param_id 2 → 'Filter Mode'
-      ...
-
-    We search this list for our 8 expected FX macro names and record
-    their param_ids.
-    """
     found_names = [""] * 8
     found_ids = [-1] * 8
     found_count = 0
@@ -332,7 +318,6 @@ def _handle_fx_macro_names(args):
             name = str(raw_name)
         except (ValueError, TypeError):
             continue
-
         for slot, expected in enumerate(FX_MACRO_NAMES_EXPECTED):
             if name == expected and found_ids[slot] < 0:
                 found_names[slot] = name
@@ -354,12 +339,9 @@ def _handle_fx_macro_names(args):
 
 
 def _handle_fx_macro_mins(args):
-    """Min values arrive as a flat list indexed by param_id."""
+    """Min values arrive as flat list indexed by param_id. Single lock acquisition."""
     with st._lock:
-        param_ids = list(st.state["fx_macro_param_ids"])
-
-    with st._lock:
-        for slot, pid in enumerate(param_ids):
+        for slot, pid in enumerate(st.state["fx_macro_param_ids"]):
             if 0 <= pid < len(args):
                 try:
                     st.state["fx_macro_mins"][slot] = float(args[pid])
@@ -368,12 +350,9 @@ def _handle_fx_macro_mins(args):
 
 
 def _handle_fx_macro_maxs(args):
-    """Max values arrive as a flat list indexed by param_id."""
+    """Max values arrive as flat list indexed by param_id. Single lock acquisition."""
     with st._lock:
-        param_ids = list(st.state["fx_macro_param_ids"])
-
-    with st._lock:
-        for slot, pid in enumerate(param_ids):
+        for slot, pid in enumerate(st.state["fx_macro_param_ids"]):
             if 0 <= pid < len(args):
                 try:
                     st.state["fx_macro_maxs"][slot] = float(args[pid])
@@ -383,14 +362,16 @@ def _handle_fx_macro_maxs(args):
 
 def _handle_fx_macro_values(args):
     """
-    Current values arrive as a flat list indexed by param_id.
+    Current values arrive as flat list indexed by param_id.
     Auto-captures baseline on first successful read.
+
+    Baseline capture is done inside a single lock acquisition to prevent
+    a race where action_save_baseline() fires between the read and write.
     """
     with st._lock:
         param_ids = list(st.state["fx_macro_param_ids"])
         baseline_already = st.state["fx_baseline_ready"]
 
-    with st._lock:
         for slot, pid in enumerate(param_ids):
             if 0 <= pid < len(args):
                 try:
@@ -398,8 +379,9 @@ def _handle_fx_macro_values(args):
                 except (ValueError, TypeError):
                     continue
 
-        # Auto-capture baseline on first successful read
-        if not baseline_already and any(p >= 0 for p in param_ids):
+        # Re-check baseline_ready inside the lock to avoid race with
+        # action_save_baseline() firing between two lock acquisitions.
+        if not st.state["fx_baseline_ready"] and any(p >= 0 for p in param_ids):
             st.state["fx_baseline"] = list(st.state["fx_macro_values"])
             st.state["fx_baseline_ready"] = True
             st.state["fx_baseline_captured_at"] = time.perf_counter()
@@ -407,7 +389,7 @@ def _handle_fx_macro_values(args):
 
 
 def on_fx_param_value(addr, *args):
-    """Single-parameter listener for FX (live updates as user moves macros)."""
+    """Single-parameter listener for FX (live updates). Called by on_param_value."""
     if len(args) < 4:
         return
     try:
@@ -420,14 +402,14 @@ def on_fx_param_value(addr, *args):
     with st._lock:
         if track_idx != st.state["fx_track_index"] or device_idx != FX_RACK_DEVICE_INDEX:
             return
-        param_ids = list(st.state["fx_macro_param_ids"])
+        param_ids = st.state["fx_macro_param_ids"]
         if pid in param_ids:
             slot = param_ids.index(pid)
             st.state["fx_macro_values"][slot] = val
 
 
 def on_fx_param_value_string(addr, *args):
-    """Display-string for FX (e.g. '200 Hz', '0 dB')."""
+    """Display-string for FX. Called by on_param_value_string."""
     if len(args) < 4:
         return
     try:
@@ -440,21 +422,17 @@ def on_fx_param_value_string(addr, *args):
     with st._lock:
         if track_idx != st.state["fx_track_index"] or device_idx != FX_RACK_DEVICE_INDEX:
             return
-        param_ids = list(st.state["fx_macro_param_ids"])
+        param_ids = st.state["fx_macro_param_ids"]
         if pid in param_ids:
             slot = param_ids.index(pid)
             st.state["fx_macro_value_strings"][slot] = text
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  EQ MACRO HANDLERS (Build B: 4 macros instead of 3 — added Trim)
+#  EQ MACRO HANDLERS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _handle_eq_macro_names(args):
-    """
-    Flat list of names in param-index order. Search for our 4 expected
-    EQ macro names (Low, Mid, High, Trim).
-    """
     found_names = [""] * EQ_MACRO_COUNT
     found_ids = [-1] * EQ_MACRO_COUNT
     found_count = 0
@@ -464,7 +442,6 @@ def _handle_eq_macro_names(args):
             name = str(raw_name)
         except (ValueError, TypeError):
             continue
-
         for slot, expected in enumerate(EQ_MACRO_NAMES_EXPECTED):
             if name == expected and found_ids[slot] < 0:
                 found_names[slot] = name
@@ -486,12 +463,9 @@ def _handle_eq_macro_names(args):
 
 
 def _handle_eq_macro_mins(args):
-    """Min values arrive as a flat list indexed by param_id."""
+    """Single lock acquisition."""
     with st._lock:
-        param_ids = list(st.state["eq_macro_param_ids"])
-
-    with st._lock:
-        for slot, pid in enumerate(param_ids):
+        for slot, pid in enumerate(st.state["eq_macro_param_ids"]):
             if 0 <= pid < len(args):
                 try:
                     st.state["eq_macro_mins"][slot] = float(args[pid])
@@ -500,12 +474,9 @@ def _handle_eq_macro_mins(args):
 
 
 def _handle_eq_macro_maxs(args):
-    """Max values arrive as a flat list indexed by param_id."""
+    """Single lock acquisition."""
     with st._lock:
-        param_ids = list(st.state["eq_macro_param_ids"])
-
-    with st._lock:
-        for slot, pid in enumerate(param_ids):
+        for slot, pid in enumerate(st.state["eq_macro_param_ids"]):
             if 0 <= pid < len(args):
                 try:
                     st.state["eq_macro_maxs"][slot] = float(args[pid])
@@ -514,12 +485,9 @@ def _handle_eq_macro_maxs(args):
 
 
 def _handle_eq_macro_values(args):
-    """Current values arrive as a flat list indexed by param_id."""
+    """Single lock acquisition."""
     with st._lock:
-        param_ids = list(st.state["eq_macro_param_ids"])
-
-    with st._lock:
-        for slot, pid in enumerate(param_ids):
+        for slot, pid in enumerate(st.state["eq_macro_param_ids"]):
             if 0 <= pid < len(args):
                 try:
                     st.state["eq_macro_values"][slot] = float(args[pid])
@@ -528,7 +496,7 @@ def _handle_eq_macro_values(args):
 
 
 def on_eq_param_value(addr, *args):
-    """Single-parameter listener for EQ (live updates as user moves macros)."""
+    """Single-parameter listener for EQ. Called by on_param_value."""
     if len(args) < 4:
         return
     try:
@@ -541,14 +509,14 @@ def on_eq_param_value(addr, *args):
     with st._lock:
         if track_idx != st.state["eq_track_index"] or device_idx != EQ_RACK_DEVICE_INDEX:
             return
-        param_ids = list(st.state["eq_macro_param_ids"])
+        param_ids = st.state["eq_macro_param_ids"]
         if pid in param_ids:
             slot = param_ids.index(pid)
             st.state["eq_macro_values"][slot] = val
 
 
 def on_eq_param_value_string(addr, *args):
-    """Display-string for EQ (e.g. '+2.3 dB')."""
+    """Display-string for EQ. Called by on_param_value_string."""
     if len(args) < 4:
         return
     try:
@@ -561,14 +529,67 @@ def on_eq_param_value_string(addr, *args):
     with st._lock:
         if track_idx != st.state["eq_track_index"] or device_idx != EQ_RACK_DEVICE_INDEX:
             return
-        param_ids = list(st.state["eq_macro_param_ids"])
+        param_ids = st.state["eq_macro_param_ids"]
         if pid in param_ids:
             slot = param_ids.index(pid)
             st.state["eq_macro_value_strings"][slot] = text
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ABLETON ERROR HANDLER (with throttling + benign-pattern filtering)
+#  UNIFIED SINGLE-PARAM DISPATCHERS
+#
+#  pythonosc Dispatcher.map() only allows ONE handler per address.
+#  Registering both on_fx_param_value and on_eq_param_value to the same
+#  address would silently drop the first. These unified handlers dispatch
+#  internally by track_id, solving the overwrite problem.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def on_param_value(addr, *args):
+    """
+    Unified handler for /live/device/get/parameter/value.
+    Routes to FX or EQ handler based on which track sent the update.
+    """
+    if len(args) < 1:
+        return
+    try:
+        track_idx = int(args[0])
+    except (ValueError, TypeError):
+        return
+
+    with st._lock:
+        fx_track = st.state["fx_track_index"]
+        eq_track = st.state["eq_track_index"]
+
+    if track_idx == fx_track:
+        on_fx_param_value(addr, *args)
+    elif track_idx == eq_track:
+        on_eq_param_value(addr, *args)
+
+
+def on_param_value_string(addr, *args):
+    """
+    Unified handler for /live/device/get/parameter/value_string.
+    Routes to FX or EQ handler based on which track sent the update.
+    """
+    if len(args) < 1:
+        return
+    try:
+        track_idx = int(args[0])
+    except (ValueError, TypeError):
+        return
+
+    with st._lock:
+        fx_track = st.state["fx_track_index"]
+        eq_track = st.state["eq_track_index"]
+
+    if track_idx == fx_track:
+        on_fx_param_value_string(addr, *args)
+    elif track_idx == eq_track:
+        on_eq_param_value_string(addr, *args)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ABLETON ERROR HANDLER
 # ═══════════════════════════════════════════════════════════════════════════
 
 def on_ableton_error(addr, *args):
@@ -577,18 +598,21 @@ def on_ableton_error(addr, *args):
     msg = str(args[0])
     now = time.perf_counter()
 
-    # Filter known harmless errors to DEBUG so they don't spam INFO logs
     for pattern in _IGNORED_ABLETON_ERROR_PATTERNS:
         if pattern in msg:
             log.debug(f"Ableton (benign): {msg}")
             return
 
-    # Throttle duplicate errors
-    if (msg == st._last_ableton_error_msg and
-        (now - st._last_ableton_error_time) < ABLETON_ERROR_THROTTLE):
-        return
-    st._last_ableton_error_msg = msg
-    st._last_ableton_error_time = now
+    # Use a dedicated lock for throttle globals — these are written from
+    # the OSC server's thread pool (ThreadingOSCUDPServer), not the main lock.
+    with _error_throttle_lock:
+        last_msg  = st._last_ableton_error_msg
+        last_time = st._last_ableton_error_time
+        if (msg == last_msg and
+                (now - last_time) < ABLETON_ERROR_THROTTLE):
+            return
+        st._last_ableton_error_msg  = msg
+        st._last_ableton_error_time = now
 
     log.warning(f"Ableton error: {msg}")
 
@@ -600,7 +624,9 @@ def on_ableton_error(addr, *args):
 def start_osc_server():
     """
     Start the OSC server in a background thread.
-    Maps every incoming OSC address to its handler function.
+    Sets state["_shutting_down"] = False on entry.
+    The unified on_param_value / on_param_value_string handlers are registered
+    once each, replacing the old duplicate-registration pattern.
     """
     from pythonosc.dispatcher import Dispatcher
     from pythonosc.osc_server import ThreadingOSCUDPServer
@@ -628,17 +654,17 @@ def start_osc_server():
     dispatcher.map("/live/clip/get/name",         on_clip_name)
     dispatcher.map("/live/clip/get/color",        on_clip_color)
 
-    # Device params (combined — dispatches by track_id)
+    # Device params (combined bulk — dispatches by track_id)
     dispatcher.map("/live/device/get/parameters/name",  on_combined_param_names)
     dispatcher.map("/live/device/get/parameters/min",   on_combined_param_mins)
     dispatcher.map("/live/device/get/parameters/max",   on_combined_param_maxs)
     dispatcher.map("/live/device/get/parameters/value", on_combined_param_values)
 
-    # Single-param listeners (one per macro per type)
-    dispatcher.map("/live/device/get/parameter/value",        on_fx_param_value)
-    dispatcher.map("/live/device/get/parameter/value_string", on_fx_param_value_string)
-    dispatcher.map("/live/device/get/parameter/value",        on_eq_param_value)
-    dispatcher.map("/live/device/get/parameter/value_string", on_eq_param_value_string)
+    # Single-param listeners — UNIFIED handlers to avoid dispatcher overwrite.
+    # Both FX and EQ listeners share these addresses; routing is done internally
+    # by track_id inside on_param_value / on_param_value_string.
+    dispatcher.map("/live/device/get/parameter/value",        on_param_value)
+    dispatcher.map("/live/device/get/parameter/value_string", on_param_value_string)
 
     # Errors
     dispatcher.map("/live/error", on_ableton_error)

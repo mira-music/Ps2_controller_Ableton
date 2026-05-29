@@ -2,19 +2,12 @@
 ================================================================================
   src/ui/updater.py — Tkinter UI Update Loop (40 Hz)
 ================================================================================
-  update_ui() is scheduled via root.after() at UI_REFRESH_MS intervals.
-  Reads state snapshot under lock, then updates widgets via dirty-cache
-  set_label() and canvas redraws.
-
-  All UI updates happen on the main thread (Tkinter requirement).
-================================================================================
 """
 
 import time
 
 from src import state as st
 from src.config import (
-    UI_REFRESH_MS, BLINK_PERIOD_MS,
     ABLETON_UNITY,
     EQ_NEUTRAL_MACRO,
     EQ_MACRO_COUNT,
@@ -24,9 +17,10 @@ from src.config import (
     FX_SLOT_FILTER_FREQ, FX_SLOT_FILTER_MODE, FX_SLOT_STUTTER, FX_SLOT_FX_SEND,
     TRIM_NEUTRAL_MACRO,
 )
+from src.config_loader import cfg
 from src.helpers import (
     db_from_vol, int_to_hex_color, clear_flashes_if_expired,
-    eq_visual_position,
+    eq_visual_position, push_notification,
 )
 from src.ui.palette import (
     ABL_BG, ABL_PANEL, ABL_CELL,
@@ -49,10 +43,16 @@ from src.log_setup import get_logger
 
 log = get_logger(__name__)
 
+# Module-level state for clip notification deduplication.
+# Tracks the last pushed severity so we only push on transitions,
+# not on every frame while clipping is active (which was 40 calls/sec).
+_last_clip_severity_pushed = None
+
+
 def _trim_visual_position(macro_value):
     """
     Convert TRIM macro value to visual knob position (0.0-1.0).
-    TRIM uses TRIM_NEUTRAL_MACRO (64.0) as center, not EQ_NEUTRAL_MACRO (107.9).
+    Uses TRIM_NEUTRAL_MACRO (64.0), not EQ_NEUTRAL_MACRO (107.9).
     """
     if macro_value <= TRIM_NEUTRAL_MACRO:
         if TRIM_NEUTRAL_MACRO <= 0:
@@ -63,23 +63,24 @@ def _trim_visual_position(macro_value):
         if boost_range <= 0:
             return 0.5
         return 0.5 + ((macro_value - TRIM_NEUTRAL_MACRO) / boost_range) * 0.5
-# ═══════════════════════════════════════════════════════════════════════════
-#  BLINK HELPER
-# ═══════════════════════════════════════════════════════════════════════════
+
 
 def _blink_on():
     ms_now = int(time.perf_counter() * 1000)
+    from src.config import BLINK_PERIOD_MS
     return (ms_now // BLINK_PERIOD_MS) % 2 == 0
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  MAIN UI UPDATE
-# ═══════════════════════════════════════════════════════════════════════════
 
 def update_ui(root, lbl):
-    clear_flashes_if_expired()
+    global _last_clip_severity_pushed
 
+    clear_flashes_if_expired()
     now = time.perf_counter()
 
+    # ── SINGLE LARGE STATE SNAPSHOT ─────────────────────────────────────
+    # All state reads happen here under one lock acquisition.
+    # Meter values are included so the meter processing below needs
+    # zero additional lock acquisitions for reads.
     with st._lock:
         s          = {k: v for k, v in st.state.items()
                       if not isinstance(v, (dict, list))}
@@ -97,13 +98,13 @@ def update_ui(root, lbl):
         l1_held    = st.state["l1_held"]
         ctrl_conn  = st.state["controller_connected"]
         ctrl_name  = st.state["controller_name"]
-        active_slot   = st.state["_fx_active_slot"]
-        active_until  = st.state["_fx_active_until"]
+        active_slot    = st.state["_fx_active_slot"]
+        active_until   = st.state["_fx_active_until"]
         recovery_until = list(st.state["_fx_recovery_until"])
         baseline_ready = st.state["fx_baseline_ready"]
         baseline_captured_at = st.state["fx_baseline_captured_at"]
-        filter_locked = st.state["fx_filter_locked"]
-        wet_locked    = st.state["fx_wet_locked"]
+        filter_locked  = st.state["fx_filter_locked"]
+        wet_locked     = st.state["fx_wet_locked"]
 
         moment_stutter   = st.state["_momentary_stutter_active"]
         moment_bass_cut  = st.state["_momentary_bass_cut_active"]
@@ -131,16 +132,24 @@ def update_ui(root, lbl):
 
         meter_left       = st.state["eq_meter_left"]
         meter_right      = st.state["eq_meter_right"]
-        meter_peak       = st.state["eq_meter_peak"]
-        meter_peak_time  = st.state["eq_meter_peak_time"]
-        
-        # Notification slot
+
+        # Meter processing inputs — snapshotted here, used below
+        prev_smoothed    = st.state["meter_smoothed_db"]
+        prev_peak_db     = st.state["meter_peak_db"]
+        prev_peak_time   = st.state["meter_peak_time"]
+        was_clip_active  = st.state["clip_active"]
+        clip_last_time   = st.state["clip_last_active_time"]
+
+        # Legacy meter (old draw_channel_meter, active until Phase 4)
+        old_peak_val     = st.state["eq_meter_peak"]
+        old_peak_time    = st.state["eq_meter_peak_time"]
+
         notif_text       = st.state["notification_text"]
         notif_severity   = st.state["notification_severity"]
         notif_time       = st.state["notification_time"]
         notif_duration   = st.state["notification_duration"]
-        
 
+    # ── SHORT-LIVED STATE EXPIRY (no lock needed — using local snapshots) ──
     if active_slot >= 0 and now > active_until:
         with st._lock:
             st.state["_fx_active_slot"] = -1
@@ -151,14 +160,14 @@ def update_ui(root, lbl):
             st.state["eq_armed_band"] = -1
         eq_armed_band = -1
 
-    # ── TRANSPORT + BPM ──
+    # ── TRANSPORT + BPM ──────────────────────────────────────────────────
     if abl["is_playing"]:
         set_label(lbl["playing"], "playing", "▶ PLAYING", fg=ABL_GREEN)
     else:
         set_label(lbl["playing"], "playing", "■ STOPPED", fg=ABL_RED)
     set_label(lbl["bpm"], "bpm", f"{abl['bpm']:.1f} BPM")
 
-    # ── BOOKMARK + GROUP ROWS ──
+    # ── BOOKMARK + GROUP ROWS ────────────────────────────────────────────
     if bmarks:
         cur = cursor_bmark
         bm  = bmarks[cur]
@@ -188,7 +197,7 @@ def update_ui(root, lbl):
         set_label(lbl["group"],     "group",     "no *-tracks", fg=ABL_TEXT_FAINT)
         set_label(lbl["group_pos"], "group_pos", "")
 
-    # ── TRACK / SCENE / CLIP NAMES ──
+    # ── TRACK / SCENE / CLIP ─────────────────────────────────────────────
     track_color_int = (all_track_colors[current_track]
                        if current_track < len(all_track_colors) else 0)
     track_color = int_to_hex_color(track_color_int, ABL_TEXT)
@@ -215,7 +224,7 @@ def update_ui(root, lbl):
               str(s["track"] + 1),
               fg=ABL_RED if s["flash_track"] else ABL_TEXT)
 
-    # ── VOLUME ──
+    # ── VOLUME ───────────────────────────────────────────────────────────
     vol = abl["track_volume"]
     vol_ratio = vol / ABLETON_UNITY
     if vol == 0.0:
@@ -233,7 +242,7 @@ def update_ui(root, lbl):
     else:
         set_label(lbl["vol_mode"], "vol_mode", "SELECT+R-stick", fg=ABL_TEXT_FAINT)
 
-    # ── MODIFIER PILLS ──
+    # ── MODIFIER PILLS ───────────────────────────────────────────────────
     lbl["r2"].config(fg=ABL_RED if s["r2_held"] else ABL_TEXT_FAINT,
                      bg="#3a1818" if s["r2_held"] else ABL_PANEL)
     lbl["select"].config(fg=ABL_BLUE if s["select_held"] else ABL_TEXT_FAINT,
@@ -247,7 +256,7 @@ def update_ui(root, lbl):
 
     set_label(lbl["action"], "action", s["last_action"])
 
-    # ── CONTROLLER STATUS ──
+    # ── CONTROLLER STATUS ────────────────────────────────────────────────
     if ctrl_conn:
         lbl["ctrl"].config(text=f"● {ctrl_name[:16]}",
                            bg="#1a2a1a", fg=ABL_GREEN)
@@ -257,7 +266,7 @@ def update_ui(root, lbl):
                            bg=BLINK_BG_BRIGHT if bright else BLINK_BG_DIM,
                            fg="#ffffff" if bright else ABL_TEXT)
 
-    # ── EQ STATUS LINE ──
+    # ── EQ STATUS LINE ───────────────────────────────────────────────────
     eq_track_color_hex = int_to_hex_color(eq_track_color, ABL_TEXT)
     if eq_idx < 0:
         set_label(lbl["eq_title"], "eq_title", "◇ EQ", fg=ABL_TEXT_FAINT)
@@ -288,7 +297,9 @@ def update_ui(root, lbl):
                   "EQ inactive (R3 to toggle)", fg=ABL_TEXT_FAINT)
         lbl["eq_glow"].config(bg=EQ_KNOB_RING_DARK)
 
-    # ── EQ KNOBS (Build B: TRIM + HIGH + MID + LOW = 4 knobs) ──
+    # ── EQ KNOBS (Build B: TRIM + HIGH + MID + LOW = 4 knobs) ───────────
+    # Single pass only. The TRIM knob uses draw_trim_knob and
+    # _trim_visual_position; EQ bands use draw_eq_knob and eq_visual_position.
     for band_idx in range(EQ_MACRO_COUNT):
         if lbl["eq_cells"][band_idx] is None:
             continue
@@ -296,7 +307,6 @@ def update_ui(root, lbl):
         macro_val = eq_macro_values[band_idx] if band_idx < len(eq_macro_values) else 0.0
         value_str = eq_value_strings[band_idx] if band_idx < len(eq_value_strings) else "—"
 
-        # Visual position depends on whether this is TRIM or an EQ band
         is_trim = (band_idx == EQ_SLOT_TRIM)
         if is_trim:
             visual_pos = _trim_visual_position(macro_val)
@@ -306,7 +316,6 @@ def update_ui(root, lbl):
         is_selected = (eq_mode_active and band_idx == eq_selected_band)
         is_armed    = (eq_mode_active and band_idx == eq_armed_band)
 
-        # Cell background tinting
         if is_armed:
             cell_bg = EQ_GLOW_ARMED
             label_color = EQ_LABEL_ARMED
@@ -323,7 +332,6 @@ def update_ui(root, lbl):
             name_lbl.config(bg=cell_bg)
             value_lbl.config(bg=cell_bg)
 
-        # Draw the appropriate knob type
         if is_trim:
             draw_trim_knob(canvas, band_idx, visual_pos,
                            selected=is_selected, armed=is_armed)
@@ -331,167 +339,107 @@ def update_ui(root, lbl):
             draw_eq_knob(canvas, band_idx, visual_pos,
                          selected=is_selected, armed=is_armed)
 
-        # Band name label
         band_name = EQ_MACRO_NAMES_EXPECTED[band_idx]
         display_name = band_name.replace("EQ ", "").upper()
         if band_name == "Trim":
             display_name = "TRIM"
         set_label(name_lbl, f"eq_name_{band_idx}", display_name, fg=label_color)
-
-        # dB value string
-        set_label(value_lbl, f"eq_value_{band_idx}",
-                  value_str if value_str else "—", fg=label_color)
-        cell, canvas, name_lbl, value_lbl = lbl["eq_cells"][band_idx]
-        macro_val = eq_macro_values[band_idx] if band_idx < len(eq_macro_values) else EQ_NEUTRAL_MACRO
-        value_str = eq_value_strings[band_idx] if band_idx < len(eq_value_strings) else "—"
-
-        visual_pos = eq_visual_position(macro_val)
-        is_selected = (eq_mode_active and band_idx == eq_selected_band)
-        is_armed    = (eq_mode_active and band_idx == eq_armed_band)
-
-        if is_armed:
-            cell_bg = EQ_GLOW_ARMED
-            label_color = EQ_LABEL_ARMED
-        elif is_selected:
-            cell_bg = EQ_GLOW_SELECTED
-            label_color = EQ_LABEL_SELECTED
-        else:
-            cell_bg = ABL_CELL
-            label_color = EQ_LABEL_COLOR
-
-        if cell.cget("bg") != cell_bg:
-            cell.config(bg=cell_bg)
-            canvas.config(bg=cell_bg)
-            name_lbl.config(bg=cell_bg)
-            value_lbl.config(bg=cell_bg)
-
-        draw_eq_knob(canvas, band_idx, visual_pos,
-                     selected=is_selected, armed=is_armed)
-
-        band_name = EQ_MACRO_NAMES_EXPECTED[band_idx]
-        display_name = band_name.replace("EQ ", "").upper()
-        set_label(name_lbl, f"eq_name_{band_idx}", display_name, fg=label_color)
-
         set_label(value_lbl, f"eq_value_{band_idx}",
                   value_str if value_str else "—", fg=label_color)
 
-    # ── DJM CHANNEL METER (Build B Phase 2: new math + CLIP detection) ──
-    # Import the new meter functions
-    from src.ui.widgets import (
-        raw_meter_to_display_db, apply_meter_ballistics,
-        update_meter_peak_db, compute_clip_state,
-    )
+    # ── DJM CHANNEL METER (Build B Phase 2 math + CLIP) ─────────────────
+    # All meter state reads were done in the initial snapshot above.
+    # dt_meter reads cfg.UI_REFRESH_MS so it respects post-restart changes.
+    dt_meter = cfg.UI_REFRESH_MS / 1000.0
 
-    current_level = max(meter_left, meter_right)  # stereo peak
-
-    # Convert raw 0-1 to display dB (-30 to +12 range)
+    current_level = max(meter_left, meter_right)
     current_display_db = raw_meter_to_display_db(current_level)
-
-    # Apply release ballistics (instant attack, slow decay)
-    with st._lock:
-        prev_smoothed = st.state["meter_smoothed_db"]
-    dt_meter = 1.0 / 40.0  # UI runs at ~40 Hz = 25ms per frame
     smoothed_db = apply_meter_ballistics(current_display_db, prev_smoothed, dt_meter)
 
-    # Peak hold
-    with st._lock:
-        prev_peak_db = st.state["meter_peak_db"]
-        prev_peak_time = st.state["meter_peak_time"]
     new_peak_db, new_peak_time = update_meter_peak_db(
         smoothed_db, prev_peak_db, prev_peak_time, now
     )
 
-    # CLIP detection
-    with st._lock:
-        was_clip_active = st.state["clip_active"]
-        clip_last_time = st.state["clip_last_active_time"]
     clip_active, clip_level, clip_last_time = compute_clip_state(
         smoothed_db, was_clip_active, clip_last_time, now
     )
 
-    # Write all computed values back to state
-    with st._lock:
-        st.state["meter_display_db"]     = current_display_db
-        st.state["meter_smoothed_db"]    = smoothed_db
-        st.state["meter_peak_db"]        = new_peak_db
-        st.state["meter_peak_time"]      = new_peak_time
-        st.state["clip_active"]          = clip_active
-        st.state["clip_level"]           = clip_level
-        st.state["clip_last_active_time"] = clip_last_time
-        
-    # TEMPORARY DEBUG — remove after verifying Phase 2 math works (take off # # for debugging a good clipping calibre)
-    #if clip_active:
-        #log.warning(f"CLIP! level={clip_level:.2f} smoothed={smoothed_db:.1f}dB peak={new_peak_db:.1f}dB")
-
-    # For now, use the OLD meter drawing (Phase 4 will replace this)
-    # The old draw_channel_meter expects raw 0-1 values, not dB
+    # Legacy meter peak (old draw_channel_meter path, active until Phase 4)
     old_peak = max(meter_left, meter_right)
-    with st._lock:
-        old_peak_val = st.state.get("eq_meter_peak", 0.0)
-        old_peak_time = st.state.get("eq_meter_peak_time", 0.0)
     new_old_peak, new_old_peak_time = update_meter_peak(
         old_peak, old_peak_val, old_peak_time, now
     )
-    with st._lock:
-        st.state["eq_meter_peak"] = new_old_peak
-        st.state["eq_meter_peak_time"] = new_old_peak_time
 
- # Draw the new DJM meter (Build B Phase 4)
+    # Batch all meter state writes into one lock acquisition
+    with st._lock:
+        st.state["meter_display_db"]      = current_display_db
+        st.state["meter_smoothed_db"]     = smoothed_db
+        st.state["meter_peak_db"]         = new_peak_db
+        st.state["meter_peak_time"]       = new_peak_time
+        st.state["clip_active"]           = clip_active
+        st.state["clip_level"]            = clip_level
+        st.state["clip_last_active_time"] = clip_last_time
+        st.state["eq_meter_peak"]         = new_old_peak
+        st.state["eq_meter_peak_time"]    = new_old_peak_time
+
+    # ── CLIP NOTIFICATIONS (push only on severity transitions) ───────────
+    # Previously pushed every frame while clipping (~40 calls/sec to
+    # push_notification and st._lock). Now only pushes when severity changes.
+    if clip_active and clip_level >= 0.7:
+        new_severity = "critical"
+        msg = "🔴 SIGNAL CLIPPING — reduce gain!"
+    elif clip_active and clip_level >= 0.3:
+        new_severity = "warning"
+        msg = "⚠ Signal approaching clip threshold"
+    else:
+        new_severity = None
+        msg = ""
+
+    if new_severity != _last_clip_severity_pushed:
+        if new_severity is not None:
+            push_notification(msg, new_severity, 1.5)
+        _last_clip_severity_pushed = new_severity
+
+    # Draw the DJM meter (Build B Phase 4 renderer)
     clip_flicker_on = should_clip_flicker(clip_level, now)
     draw_djm_meter(
         lbl["eq_channel_meter"],
         smoothed_db, new_peak_db,
         clip_active, clip_level, clip_flicker_on
     )
-    
-        # ── NOTIFICATION SLOT (Build B Phase 3) ──
-    # Auto-push CLIP notifications when clipping is detected
-    if clip_active and clip_level >= 0.7:
-        from src.helpers import push_notification
-        push_notification("🔴 SIGNAL CLIPPING — reduce gain!", "critical", 1.5)
-    elif clip_active and clip_level >= 0.3:
-        from src.helpers import push_notification
-        push_notification("⚠ Signal approaching clip threshold", "warning", 1.5)
 
-    # Drive the notification label visibility and color
+    # ── NOTIFICATION SLOT ────────────────────────────────────────────────
     if notif_text and notif_time > 0:
         elapsed_notif = now - notif_time
         if elapsed_notif < notif_duration:
-            # Still visible — show the notification
-            # Color by severity
             if notif_severity == "critical":
-                notif_fg = "#ff3b30"    # red
-                notif_bg = "#3a1818"    # dark red background
+                notif_fg = "#ff3b30"
+                notif_bg = "#3a1818"
             elif notif_severity == "warning":
-                notif_fg = "#ff6c2c"    # orange
-                notif_bg = "#2a1a0a"    # dark orange background
+                notif_fg = "#ff6c2c"
+                notif_bg = "#2a1a0a"
             else:
-                notif_fg = "#f4d22b"    # yellow
-                notif_bg = "#2a2a0a"    # dark yellow background
+                notif_fg = "#f4d22b"
+                notif_bg = "#2a2a0a"
 
-            # Fade out in the last 30% of duration
+            # Fade: in the last 30% of duration, step to dim
             fade_start = notif_duration * 0.7
             if elapsed_notif > fade_start:
-                fade_fraction = (elapsed_notif - fade_start) / (notif_duration - fade_start)
-                # Interpolate fg toward ABL_TEXT_FAINT
-                # Simple approach: just switch to dim at 85%
-                if fade_fraction > 0.5:
-                    notif_fg = ABL_TEXT_FAINT
-                    notif_bg = ABL_BG
-            
+                notif_fg = ABL_TEXT_FAINT
+                notif_bg = ABL_BG
+
             if lbl["notification"].cget("text") != notif_text:
                 lbl["notification"].config(text=notif_text, fg=notif_fg, bg=notif_bg)
             elif lbl["notification"].cget("fg") != notif_fg:
                 lbl["notification"].config(fg=notif_fg, bg=notif_bg)
         else:
-            # Duration expired — hide
             if lbl["notification"].cget("text") != "":
                 lbl["notification"].config(text="", bg=ABL_BG)
     else:
         if lbl["notification"].cget("text") != "":
             lbl["notification"].config(text="", bg=ABL_BG)
 
-    # ── FX PANEL TITLE ──
+    # ── FX PANEL TITLE ───────────────────────────────────────────────────
     fx_color = int_to_hex_color(fx_track_color, ABL_TEXT)
     if fx_idx < 0:
         set_label(lbl["fx_title"], "fx_title", "⚡ FX MACHINE", fg=ABL_TEXT_FAINT)
@@ -532,7 +480,7 @@ def update_ui(root, lbl):
     else:
         set_label(lbl["lock_wet"], "lock_wet", "wet: free", fg=ABL_TEXT_FAINT)
 
-    # ── FX KNOBS ──
+    # ── FX KNOBS ─────────────────────────────────────────────────────────
     for slot in range(8):
         cell, canvas, name_lbl, value_lbl = lbl["fx_cells"][slot]
         accent  = ABL_ORANGE if slot < 4 else ABL_BLUE
@@ -596,4 +544,5 @@ def update_ui(root, lbl):
             set_label(name_lbl,  f"fx_name_{slot}", display_name, fg=ABL_TEXT_DIM)
             set_label(value_lbl, f"fx_value_{slot}", value_string, fg=accent)
 
+    from src.config import UI_REFRESH_MS
     root.after(UI_REFRESH_MS, update_ui, root, lbl)

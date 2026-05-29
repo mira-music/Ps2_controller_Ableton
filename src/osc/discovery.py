@@ -2,21 +2,6 @@
 ================================================================================
   src/osc/discovery.py — Session Discovery
 ================================================================================
-  fetch_all_names() — called at startup and on manual refresh.
-  Queries Ableton for the full session state:
-    - Scene count, names, colors
-    - Track count, names, colors
-    - Locates ~ FX Macros track
-    - Locates ~ EQ Macros track
-    - Loads macro names + values for both racks
-    - Registers OSC listeners for live updates
-
-  Build B: EQ rack now has 4 macros instead of 3 (Trim added at slot 3).
-
-  IMPORTANT: bookmark dicts use the key "scene_index" and group dicts
-  use the key "track_index". These names are established convention
-  used throughout navigation.py and updater.py. Don't rename them.
-================================================================================
 """
 
 import time
@@ -48,13 +33,21 @@ log = get_logger(__name__)
 def fetch_all_names():
     """
     Full session discovery. Called once at startup and again on
-    SELECT+START manual refresh. Runs in a background thread because
-    it makes many OSC queries with sleeps between them.
+    SELECT+START manual refresh.
+
+    Resets fx_ready and eq_ready at the start to prevent stale param IDs
+    from being used during the ~0.4s rediscovery window.
     """
     if not st._fetch_lock.acquire(blocking=False):
         log.info("Fetch already running — skipping")
         return
     try:
+        # Reset ready flags immediately so no writes go out with stale
+        # param IDs while we're rebuilding the rack structure.
+        with st._lock:
+            st.state["fx_ready"] = False
+            st.state["eq_ready"] = False
+
         log.info("Requesting session counts…")
         st.osc.send_message("/live/song/get/num_scenes", [])
         st.osc.send_message("/live/song/get/num_tracks", [])
@@ -124,7 +117,6 @@ def fetch_all_names():
             osc_register_eq_meter_listener()
             osc_query_track_color(eq_idx)
 
-        # ─── Initial position query ───
         osc_query_position()
         osc_query_group_previews()
 
@@ -140,12 +132,11 @@ def fetch_all_names():
 def rebuild_bookmarks():
     """
     Scan all scene names; find those starting with § prefix.
+    Result is sorted ascending by scene_index (guaranteed by enumerate order).
+    _sync_bookmark_cursor_locked relies on this sort order for its break.
 
     Bookmark dict format (ESTABLISHED CONVENTION — DO NOT CHANGE):
       {"scene_index": int, "name": str}
-
-    The key "scene_index" is read by navigation.py (navigate_bookmark)
-    and updater.py (UI bookmark display). Don't rename to "index".
     """
     with st._lock:
         scenes = list(st.ableton["all_scene_names"])
@@ -226,15 +217,17 @@ def rebuild_eq_track():
 
 def _sync_bookmark_cursor_locked(scene_idx):
     """
-    Move bookmark cursor to point at the bookmark that owns the
-    given scene index. Called when scene changes via navigation.
+    Called with st._lock held. Do not call from unlocked context.
 
-    Reads bookmark dicts using "scene_index" key.
+    Move bookmark cursor to point at the bookmark that owns the given
+    scene index. Bookmarks are sorted ascending by scene_index (guaranteed
+    by rebuild_bookmarks iterating enumerate(all_scene_names) in order),
+    so the break is safe — once we see a bookmark past our scene, all
+    subsequent ones will also be past it.
     """
     bookmarks = st.state["bookmarks"]
     cur_cursor = st.state["bookmark_cursor"]
 
-    # Find largest scene_index <= scene_idx
     new_cursor = -1
     for i, bm in enumerate(bookmarks):
         if bm["scene_index"] <= scene_idx:

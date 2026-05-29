@@ -2,33 +2,6 @@
 ================================================================================
   src/controller/buttons.py — Button Press/Release Handlers
 ================================================================================
-  Layer-aware routing for button events:
-
-    L1 held  (FX mode)
-      X       → STUTTER (momentary)
-      O       → BASS CUT (momentary)
-      △       → Launch scene
-      □       → FX SEND THROW (momentary)
-      L3      → Toggle filter lock
-      R3      → Toggle wet lock
-
-    SELECT held
-      R1      → Save FX baseline
-      R3      → Volume mute toggle
-      START   → Force refresh
-
-    Nav layer (default)
-      X       → Launch clip
-      O       → Stop clip
-      △       → Launch scene
-      □       → Arm track
-      L2      → Stop track
-      L1      → Enter FX mode (selects ~ FX Macros track)
-      R2      → Safety gate ON
-      SELECT  → Modifier ON
-      START   → Play/stop transport
-      R3      → Toggle EQ mode
-================================================================================
 """
 
 from src import state as st
@@ -55,9 +28,6 @@ from src.engine.eq import action_toggle_eq_mode
 from src.helpers import reset_accel_state
 from src.osc.client import osc_select_track
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  BUTTON DOWN
-# ═══════════════════════════════════════════════════════════════════════════
 
 def handle_button_down(button):
     with st._lock:
@@ -65,7 +35,6 @@ def handle_button_down(button):
         select_held = st.state["select_held"]
         fx_track    = st.state["fx_track_index"]
 
-    # FX-LAYER MOMENTARY EFFECTS
     if l1_held:
         if button == BTN_CROSS:
             momentary_stutter_on()
@@ -86,22 +55,18 @@ def handle_button_down(button):
             action_toggle_wet_lock()
             return
 
-    # SELECT + R1: save baseline
     if select_held and button == BTN_R1:
         action_save_baseline()
         return
 
-    # SELECT + R3: volume mute toggle
     if select_held and button == BTN_R3:
         action_volume_mute_toggle()
         return
 
-    # R3 alone in nav layer: toggle EQ mode
     if not l1_held and not select_held and button == BTN_R3:
         action_toggle_eq_mode()
         return
 
-    # NORMAL NAV-LAYER BUTTONS
     if   button == BTN_CROSS:    action_launch_clip()
     elif button == BTN_CIRCLE:   action_stop_clip()
     elif button == BTN_TRIANGLE: action_launch_scene()
@@ -109,9 +74,14 @@ def handle_button_down(button):
     elif button == BTN_L2:       action_stop_track()
     elif button == BTN_L1:
         with st._lock:
-            st.state["l1_held"]     = True
+            # Guard: ignore re-press if already held (hardware bounce protection).
+            # Without this, _pre_l1_track gets overwritten with the current track
+            # instead of the pre-FX-mode track on controller bounce.
+            if st.state["l1_held"]:
+                return
+            st.state["l1_held"]       = True
             st.state["_pre_l1_track"] = st.state["track"]
-            st.state["last_action"] = "⚡ FX mode ON  →  view: ~ FX Macros"
+            st.state["last_action"]   = "⚡ FX mode ON  →  view: ~ FX Macros"
         if fx_track >= 0:
             osc_select_track(fx_track)
     elif button == BTN_R2:
@@ -128,9 +98,6 @@ def handle_button_down(button):
         else:
             action_transport_toggle()
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  BUTTON UP
-# ═══════════════════════════════════════════════════════════════════════════
 
 def handle_button_up(button):
     if button == BTN_CROSS:
