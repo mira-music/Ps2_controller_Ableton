@@ -2,29 +2,9 @@
 ================================================================================
   src/config_loader.py — TOML Config Loading + Hot-Reload + Singleton
 ================================================================================
-  Loads tunable parameters from config/active.toml at startup, and re-loads
-  them on demand (via SELECT+START or the ⟳ REFRESH button in the UI).
-
-  Architecture:
-    - `cfg` is a singleton object. Other modules import it and access
-      values like `cfg.EQ_SWEEP_SECONDS`.
-    - On startup, init_config() is called once. It:
-        1. Locates config/active.toml (creating it from default.toml if missing)
-        2. Reads the file
-        3. Maps TOML values → cfg attributes
-        4. Falls back to hardcoded defaults from src/config.py on any failure
-    - On hot-reload, reload_config() is called. It:
-        1. Re-reads config/active.toml
-        2. Diffs against current cfg values
-        3. Applies hot-reloadable values immediately
-        4. Records restart-required changes for the notification slot
-
-  Each cfg attribute is classified as either HOT-RELOADABLE or RESTART-REQUIRED.
-  This mirrors the [LIVE] / [RESTART] markers in the TOML comments.
-
-  Path detection:
-    - Running as .py script:  [project_root]/config/active.toml
-    - Running as .exe bundle: [exe_folder]/config/active.toml
+  Build B revision: added [diagnostics] section keys to _CFG_MAP so the
+  diagnostics layer can read its tunables from the cfg singleton with the
+  same hot-reload behavior as everything else.
 ================================================================================
 """
 
@@ -43,12 +23,6 @@ log = get_logger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _get_base_dir() -> Path:
-    """
-    Detect base directory for config files.
-
-    Running as .exe (PyInstaller bundle): folder containing the .exe
-    Running as .py script: project root (parent of src/)
-    """
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
     else:
@@ -69,14 +43,6 @@ def _get_default_path() -> Path:
 # ═══════════════════════════════════════════════════════════════════════════
 #  RUNTIME CONFIG SINGLETON
 # ═══════════════════════════════════════════════════════════════════════════
-#
-#  All tunable values live here as instance attributes. Other modules
-#  import `cfg` and read e.g. `cfg.EQ_SWEEP_SECONDS`. Re-reading from
-#  this object always returns the current value (not a cached import).
-#
-#  Defaults are seeded from src/config.py at import time. If the TOML
-#  load fails, these stay as the hardcoded safety net.
-# ═══════════════════════════════════════════════════════════════════════════
 
 class _RuntimeConfig:
     """Singleton holding all hot-reloadable tunable values."""
@@ -91,21 +57,20 @@ class _RuntimeConfig:
         # ─── EQ dominance ───
         self.EQ_DOMINANCE_RATIO    = defaults.EQ_DOMINANCE_RATIO
 
-        # ─── EQ flick (double-flick gestures) ───
+        # ─── EQ flick ───
         self.EQ_FLICK_EXTREME      = defaults.EQ_FLICK_EXTREME
         self.EQ_FLICK_RETURN       = defaults.EQ_FLICK_RETURN
         self.EQ_FLICK_TIMEOUT_MS   = defaults.EQ_FLICK_TIMEOUT_MS
 
-        # ─── EQ detent (sticky 0 dB) ───
+        # ─── EQ detent ───
         self.EQ_DETENT_RANGE       = defaults.EQ_DETENT_RANGE
         self.EQ_DETENT_MIN_FACTOR  = defaults.EQ_DETENT_MIN_FACTOR
 
         # ─── EQ OSC writes ───
         self.EQ_WRITE_THROTTLE     = defaults.EQ_WRITE_THROTTLE
-        # Note: EQ_WRITE_EPSILON is a new value, not in defaults yet
         self.EQ_WRITE_EPSILON      = 0.15
 
-        # ─── EQ ramp animation ───
+        # ─── EQ ramp ───
         self.EQ_RAMP_MIN_MS        = defaults.EQ_RAMP_MIN_MS
         self.EQ_RAMP_MAX_MS        = defaults.EQ_RAMP_MAX_MS
 
@@ -113,7 +78,7 @@ class _RuntimeConfig:
         self.EQ_BASS_BOOST_CAP     = defaults.EQ_BASS_BOOST_CAP
         self.EQ_BOOST_PCT          = defaults.EQ_BOOST_PCT
 
-        # ─── TRIM (new in this build) ───
+        # ─── TRIM ───
         self.TRIM_SWEEP_SECONDS    = 0.25
         self.TRIM_CURVE_EXP        = 1.0
         self.TRIM_SMOOTHING_FACTOR = 0.55
@@ -130,7 +95,7 @@ class _RuntimeConfig:
         self.METER_PEAK_HOLD_SECONDS    = defaults.EQ_METER_PEAK_HOLD_S
         self.METER_PEAK_FALL_DB_PER_SEC = 30.0
 
-        # ─── Meter clip indicator ───
+        # ─── Meter clip ───
         self.METER_CLIP_WARN_DB         = 6.0
         self.METER_CLIP_CRITICAL_DB     = 9.0
         self.METER_CLIP_FLICKER_HZ      = 4.0
@@ -148,7 +113,7 @@ class _RuntimeConfig:
         self.FX_WRITE_THROTTLE      = defaults.FX_WRITE_THROTTLE
         self.FX_WRITE_EPSILON_FRAC  = defaults.FX_WRITE_EPSILON_FRAC
 
-        # ─── FX delay feedback (D-pad stepping) ───
+        # ─── FX delay FB ───
         self.FX_DELAY_FB_STEPS      = defaults.FX_DELAY_FB_STEPS
         self.FX_DELAY_FB_CLAMP_FRAC = defaults.FX_DELAY_FB_CLAMP_FRAC
         self.FX_DELAY_FB_DEBOUNCE   = defaults.FX_DELAY_FB_DEBOUNCE
@@ -174,29 +139,58 @@ class _RuntimeConfig:
         self.IDLE_REPROBE_AFTER        = defaults.IDLE_REPROBE_AFTER
         self.SELECT_RECONCILE_INTERVAL = defaults.SELECT_RECONCILE_INTERVAL
 
-        # ─── UI (RESTART-REQUIRED — read once at init) ───
+        # ─── UI (RESTART) ───
         self.UI_REFRESH_MS           = defaults.UI_REFRESH_MS
         self.BLINK_PERIOD_MS         = defaults.BLINK_PERIOD_MS
         self.WINDOW_WIDTH            = 760
         self.WINDOW_HEIGHT           = 900
 
-        # ─── Network (RESTART-REQUIRED) ───
+        # ─── Network (RESTART) ───
         self.OSC_HOST                = defaults.OSC_HOST
         self.OSC_SEND_PORT           = defaults.OSC_SEND_PORT
         self.OSC_RECEIVE_PORT        = defaults.OSC_RECEIVE_PORT
 
+        # ─── Diagnostics (NEW in Build B) ───
+        # Master controls
+        self.DIAG_ENABLED                  = False
+        self.DIAG_LOG_PATH                 = "logs/diagnostics.log"
+        self.DIAG_JSONL_PATH               = "logs/diagnostics.jsonl"
+        self.DIAG_SUMMARY_INTERVAL_S       = 10.0
+        self.DIAG_SAMPLE_INTERVAL_S        = 1.0
+        self.DIAG_SLOW_FUNCTION_MS         = 5.0
+        self.DIAG_SLOW_FRAME_MS            = 50.0
+        self.DIAG_OSC_WINDOW_S             = 5.0
+        self.DIAG_JSONL_FORMAT             = "compact"
+        self.DIAG_JSONL_INCLUDE_OSC_ARGS   = False
 
-# The singleton — other modules import this
+        # Warning thresholds
+        self.DIAG_WARN_CLIP_RATE_PER_MIN   = 10
+        self.DIAG_WARN_OSC_SEND_PER_SEC    = 200
+        self.DIAG_WARN_OSC_RECV_PER_SEC    = 300
+        self.DIAG_WARN_SINGLE_CALL_MS      = 100.0
+        self.DIAG_WARN_CPU_PERCENT         = 25.0
+        self.DIAG_WARN_MEMORY_GROWTH_MB    = 50.0
+        self.DIAG_WARN_THREAD_MISS_FRAC    = 0.10
+
+        # Rate limiting
+        self.DIAG_RL_ENABLED               = False
+        self.DIAG_RL_CLIP_NOTIF_PER_MIN    = 20
+        self.DIAG_RL_OSC_PER_ADDR_PER_SEC  = 100
+        self.DIAG_RL_COOLDOWN_S            = 5.0
+
+        # Hooks (RESTART — applied at install time)
+        self.DIAG_TIMED_FUNCTIONS          = []
+        self.DIAG_TRACK_ALL_OSC_SENDS      = True
+        self.DIAG_TRACK_ALL_OSC_RECEIVES   = True
+        self.DIAG_TRACKED_OSC_ADDRESSES    = []
+
+
+# The singleton
 cfg = _RuntimeConfig()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  RESTART-REQUIRED REGISTRY
-# ═══════════════════════════════════════════════════════════════════════════
-#
-#  These attribute names cannot take effect via hot-reload because they're
-#  consumed once at startup (thread sleeps, Tk window size, OSC bindings).
-#  When the user changes one of these, we warn them via the notification.
 # ═══════════════════════════════════════════════════════════════════════════
 
 _RESTART_REQUIRED_ATTRS = {
@@ -207,15 +201,18 @@ _RESTART_REQUIRED_ATTRS = {
     "OSC_HOST",
     "OSC_SEND_PORT",
     "OSC_RECEIVE_PORT",
+    # Diagnostics restart-required
+    "DIAG_LOG_PATH",
+    "DIAG_JSONL_PATH",
+    "DIAG_TIMED_FUNCTIONS",
+    "DIAG_TRACK_ALL_OSC_SENDS",
+    "DIAG_TRACK_ALL_OSC_RECEIVES",
+    "DIAG_TRACKED_OSC_ADDRESSES",
 }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TOML → CFG MAPPING
-# ═══════════════════════════════════════════════════════════════════════════
-#
-#  Each tuple is: (cfg_attribute, toml_path)
-#  toml_path is a list of nested keys, e.g. ["eq", "encoder", "sweep_seconds"]
 # ═══════════════════════════════════════════════════════════════════════════
 
 _CFG_MAP = [
@@ -320,6 +317,40 @@ _CFG_MAP = [
     ("OSC_HOST",         ["network", "osc_host"]),
     ("OSC_SEND_PORT",    ["network", "osc_send_port"]),
     ("OSC_RECEIVE_PORT", ["network", "osc_receive_port"]),
+
+    # ─── Diagnostics (NEW in Build B) ───
+    # Master controls
+    ("DIAG_ENABLED",                ["diagnostics", "enabled"]),
+    ("DIAG_LOG_PATH",               ["diagnostics", "log_path"]),
+    ("DIAG_JSONL_PATH",             ["diagnostics", "jsonl_path"]),
+    ("DIAG_SUMMARY_INTERVAL_S",     ["diagnostics", "summary_interval_s"]),
+    ("DIAG_SAMPLE_INTERVAL_S",      ["diagnostics", "sample_interval_s"]),
+    ("DIAG_SLOW_FUNCTION_MS",       ["diagnostics", "slow_function_threshold_ms"]),
+    ("DIAG_SLOW_FRAME_MS",          ["diagnostics", "slow_frame_threshold_ms"]),
+    ("DIAG_OSC_WINDOW_S",           ["diagnostics", "osc_traffic_window_s"]),
+    ("DIAG_JSONL_FORMAT",           ["diagnostics", "jsonl_format"]),
+    ("DIAG_JSONL_INCLUDE_OSC_ARGS", ["diagnostics", "jsonl_include_osc_args"]),
+
+    # Warnings
+    ("DIAG_WARN_CLIP_RATE_PER_MIN", ["diagnostics", "warnings", "clip_event_rate_per_min"]),
+    ("DIAG_WARN_OSC_SEND_PER_SEC",  ["diagnostics", "warnings", "osc_send_rate_per_sec"]),
+    ("DIAG_WARN_OSC_RECV_PER_SEC",  ["diagnostics", "warnings", "osc_recv_rate_per_sec"]),
+    ("DIAG_WARN_SINGLE_CALL_MS",    ["diagnostics", "warnings", "single_call_warn_ms"]),
+    ("DIAG_WARN_CPU_PERCENT",       ["diagnostics", "warnings", "cpu_warn_percent"]),
+    ("DIAG_WARN_MEMORY_GROWTH_MB",  ["diagnostics", "warnings", "memory_growth_warn_mb"]),
+    ("DIAG_WARN_THREAD_MISS_FRAC",  ["diagnostics", "warnings", "thread_miss_warn_fraction"]),
+
+    # Rate limiting
+    ("DIAG_RL_ENABLED",               ["diagnostics", "rate_limit", "enabled"]),
+    ("DIAG_RL_CLIP_NOTIF_PER_MIN",    ["diagnostics", "rate_limit", "clip_notifications_per_min"]),
+    ("DIAG_RL_OSC_PER_ADDR_PER_SEC",  ["diagnostics", "rate_limit", "osc_sends_per_address_per_sec"]),
+    ("DIAG_RL_COOLDOWN_S",            ["diagnostics", "rate_limit", "cooldown_s"]),
+
+    # Hooks (RESTART)
+    ("DIAG_TIMED_FUNCTIONS",         ["diagnostics", "hooks", "timed_functions"]),
+    ("DIAG_TRACK_ALL_OSC_SENDS",     ["diagnostics", "hooks", "track_all_osc_sends"]),
+    ("DIAG_TRACK_ALL_OSC_RECEIVES",  ["diagnostics", "hooks", "track_all_osc_receives"]),
+    ("DIAG_TRACKED_OSC_ADDRESSES",   ["diagnostics", "hooks", "tracked_osc_addresses"]),
 ]
 
 
@@ -328,7 +359,6 @@ _CFG_MAP = [
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _nested_get(d: dict, path: list):
-    """Safely navigate nested dict by path. Returns None if any key is missing."""
     cur = d
     for key in path:
         if not isinstance(cur, dict) or key not in cur:
@@ -338,23 +368,15 @@ def _nested_get(d: dict, path: list):
 
 
 def _apply_toml(toml_data: dict) -> dict:
-    """
-    Apply TOML data to the cfg singleton.
-    Returns a dict of {attr_name: (old_value, new_value)} for everything
-    that actually changed.
-    """
     changes = {}
-
     for attr, path in _CFG_MAP:
         value = _nested_get(toml_data, path)
         if value is None:
-            continue  # missing from TOML — keep current/default
-
+            continue
         current = getattr(cfg, attr)
         if value != current:
             setattr(cfg, attr, value)
             changes[attr] = (current, value)
-
     return changes
 
 
@@ -363,14 +385,9 @@ def _apply_toml(toml_data: dict) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _ensure_active_toml_exists() -> bool:
-    """
-    If active.toml doesn't exist, copy default.toml to create it.
-    Returns True if a new active.toml was created.
-    """
     active = _get_active_path()
     if active.exists():
         return False
-
     default = _get_default_path()
     if not default.exists():
         log.warning(
@@ -378,7 +395,6 @@ def _ensure_active_toml_exists() -> bool:
             "Running with hardcoded defaults from src/config.py."
         )
         return False
-
     try:
         shutil.copy2(default, active)
         log.info(f"First-run: created {active.name} from {default.name}")
@@ -389,26 +405,16 @@ def _ensure_active_toml_exists() -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  PUBLIC API — INIT & RELOAD
+#  PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════════
 
 def init_config():
-    """
-    Called once at app startup. Locates and loads config/active.toml.
-    If anything fails, cfg keeps its hardcoded defaults — the app still runs.
-    """
     log.info("Loading configuration…")
-
-    # Ensure active.toml exists (create from default.toml on first run)
     _ensure_active_toml_exists()
-
     active = _get_active_path()
     if not active.exists():
-        log.warning(
-            f"No config file at {active}. Using hardcoded defaults."
-        )
+        log.warning(f"No config file at {active}. Using hardcoded defaults.")
         return
-
     try:
         with open(active, "rb") as f:
             toml_data = tomllib.load(f)
@@ -426,19 +432,6 @@ def init_config():
 
 
 def reload_config() -> dict:
-    """
-    Re-read config/active.toml and apply hot-reloadable changes.
-
-    Returns a dict describing what happened:
-        {
-            "success": bool,
-            "error": str | None,
-            "changes_applied": [(attr, old, new), ...],
-            "restart_required": [(attr, old, new), ...],
-        }
-
-    Called by SELECT+START refresh and the UI refresh button.
-    """
     result = {
         "success": False,
         "error": None,
@@ -464,7 +457,6 @@ def reload_config() -> dict:
         log.warning(f"Reload failed — {result['error']} — keeping current values")
         return result
 
-    # Apply and diff
     changes = _apply_toml(toml_data)
 
     for attr, (old, new) in changes.items():
@@ -489,12 +481,7 @@ def reload_config() -> dict:
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  UTILITY: SUMMARY FOR DEBUGGING
-# ═══════════════════════════════════════════════════════════════════════════
-
 def get_summary() -> str:
-    """Returns a human-readable summary of current config values. Useful for diagnostics."""
     lines = ["Current config:"]
     for attr, _ in _CFG_MAP:
         value = getattr(cfg, attr, "?")

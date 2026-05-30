@@ -650,13 +650,181 @@ osc_receive_port = 11001
 
 
 
+
 # =============================================================================
-#  END OF CONFIG
+#  [diagnostics] — Performance monitoring and self-analysis
 # =============================================================================
 #
-#  If you've made it this far, you understand the system better than most
-#  software developers. Have fun tuning. Trust your ears.
+#  Optional diagnostics layer that observes the app at runtime, measures
+#  CPU/RAM, tracks OSC traffic, profiles hot functions, and writes detailed
+#  log files you can review later to find performance bottlenecks.
 #
-#  — MIRA / Modulated_OFC
+#  When disabled (set enabled = false), there is ZERO runtime cost — the
+#  diagnostics module isn't even imported.
 #
+#  When enabled, expect ~1-2% CPU overhead and a small amount of memory
+#  (~5-10 MB) for the rolling stats buffers.
+#
+#  Output files (rotated at 5 MB, 10 backups, same as main log):
+#    logs/diagnostics.log    — human-readable summary every N seconds
+#    logs/diagnostics.jsonl  — machine-readable, one JSON object per measurement
+#
+#  Use the standalone tool 'python analyze_diagnostics.py' to analyze a past
+#  session's .jsonl file and produce a top-bottlenecks report.
 # =============================================================================
+
+[diagnostics]
+
+# [LIVE] Master on/off switch. Set to true to enable.
+enabled = true
+
+# [RESTART] Path (relative to app folder) for the human-readable log.
+log_path = "logs/diagnostics.log"
+
+# [RESTART] Path for the machine-readable JSON Lines log.
+jsonl_path = "logs/diagnostics.jsonl"
+
+# [LIVE] How often to write a full summary block to the text log (seconds).
+summary_interval_s = 10.0
+
+# [LIVE] How often the background sampler measures CPU, RAM, threads (seconds).
+sample_interval_s = 1.0
+
+# [LIVE] Functions that take longer than this get logged as outliers (ms).
+slow_function_threshold_ms = 5.0
+
+# [LIVE] UI frames slower than this get flagged (ms). UI target is 25 ms.
+slow_frame_threshold_ms = 50.0
+
+# [LIVE] Rolling window size for OSC rate calculations (seconds).
+osc_traffic_window_s = 5.0
+
+# [LIVE] JSONL output format: "compact" (one line per event, small file)
+#        or "pretty" (indented JSON, easier to read, ~4× larger).
+jsonl_format = "compact"
+
+# [LIVE] Whether to include OSC message arguments in JSONL (full data)
+#        or just the address (metadata only).
+jsonl_include_osc_args = false
+
+
+# =============================================================================
+#  [diagnostics.warnings] — Thresholds for warning-level events
+# =============================================================================
+#
+#  When any of these counters exceed their threshold within a 60-second window,
+#  a warning is written to the summary log. Useful for catching abnormal
+#  behavior (e.g. clipping happens 50× per minute = something is wrong).
+# =============================================================================
+
+[diagnostics.warnings]
+
+# [LIVE] Warn if clip events exceed this rate (events per minute)
+clip_event_rate_per_min = 10
+
+# [LIVE] Warn if outbound OSC rate exceeds this (messages per second)
+osc_send_rate_per_sec = 200
+
+# [LIVE] Warn if inbound OSC rate exceeds this (messages per second)
+osc_recv_rate_per_sec = 300
+
+# [LIVE] Warn if any single function call exceeds this duration (ms)
+single_call_warn_ms = 100.0
+
+# [LIVE] Warn if CPU exceeds this percentage (sustained, not instant)
+cpu_warn_percent = 25.0
+
+# [LIVE] Warn if memory grows by more than this many MB since startup
+memory_growth_warn_mb = 50.0
+
+# [LIVE] Warn if a thread misses more than this fraction of its target ticks
+# Example: 0.10 = warn if UI loop misses >10% of frames in last 10s
+thread_miss_warn_fraction = 0.10
+
+
+# =============================================================================
+#  [diagnostics.rate_limit] — Adaptive throttling (when enabled)
+# =============================================================================
+#
+#  Optional self-defense: if certain events fire too frequently, the
+#  diagnostics layer suppresses subsequent occurrences for a cooldown period.
+#  Disabled by default — measure first, then decide if you need this.
+# =============================================================================
+
+[diagnostics.rate_limit]
+
+# [LIVE] Enable adaptive rate limiting (master switch).
+enabled = false
+
+# [LIVE] Max clip notifications per minute. Excess is dropped silently.
+clip_notifications_per_min = 20
+
+# [LIVE] Max OSC sends per second to any single address.
+osc_sends_per_address_per_sec = 100
+
+# [LIVE] Cooldown period after a limit triggers, in seconds.
+cooldown_s = 5.0
+
+
+# =============================================================================
+#  [diagnostics.hooks] — Which functions to instrument
+# =============================================================================
+#
+#  List of dotted module paths to functions that should be wrapped by the
+#  profiler. Add or remove entries here to control what gets measured
+#  WITHOUT modifying source code.
+#
+#  Each entry is "module.path.function_name". If a function doesn't exist
+#  (typo, renamed), the installer logs a warning and skips it.
+# =============================================================================
+
+[diagnostics.hooks]
+
+# [RESTART] List of functions to profile. Default set covers the hot paths.
+timed_functions = [
+    # UI hot path
+    "src.ui.updater.update_ui",
+    "src.ui.widgets.draw_djm_meter",
+    "src.ui.widgets.draw_eq_knob",
+    "src.ui.widgets.draw_trim_knob",
+    "src.ui.widgets.draw_knob",
+
+    # EQ engine
+    "src.engine.eq.eq_drive_continuous_encoder",
+    "src.engine.eq.update_eq_x_gesture",
+    "src.engine.eq.update_eq_y_gesture_v911",
+
+    # FX engine
+    "src.engine.fx.fx_drive_macro",
+
+    # Polling threads
+    "src.engine.polling.eq_ramp_loop",
+    "src.engine.polling.polling_loop",
+
+    # Controller loop
+    "src.controller.loop.controller_loop",
+
+    # OSC discovery (slow but expected)
+    "src.osc.discovery.fetch_all_names",
+
+    # Meter math
+    "src.ui.widgets.raw_meter_to_display_db",
+    "src.ui.widgets.apply_meter_ballistics",
+    "src.ui.widgets.compute_clip_state",
+]
+
+# [RESTART] Track ALL OSC sends regardless of address (true), or only
+# the addresses listed in tracked_osc_addresses below (false).
+track_all_osc_sends = true
+
+# [RESTART] Track ALL OSC receives regardless of address.
+track_all_osc_receives = true
+
+# [RESTART] Specific OSC addresses to track (used when track_all_osc_sends
+# or track_all_osc_receives is false). Use prefix matching.
+tracked_osc_addresses = [
+    "/live/device/set/parameter/value",
+    "/live/device/get/parameter/value",
+    "/live/track/get/output_meter",
+    "/live/song/get/tempo",
+]

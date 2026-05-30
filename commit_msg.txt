@@ -1,0 +1,49 @@
+fix: diagnostics layer hooks + clean shutdown + cross-module patching
+
+Three real bugs found and fixed via the diagnostics output itself:
+
+1. on_close called twice on window close — TclError on second destroy.
+   Replaced on_close with idempotency guard using mutable list closure
+   (closures can mutate but not reassign outer-scope variables without
+   nonlocal). Also wrapped root.destroy() in winfo_exists() check and
+   try/except so Tkinter's own cleanup races don't cause crashes.
+   File: src/main.py — full rewrite of on_close
+
+2. Diagnostics shutdown ordering caused stdout deadlock at interpreter
+   exit ("_enter_buffered_busy" error from daemon threads still doing
+   I/O during finalization). Solution: stop diagnostics FIRST in the
+   shutdown sequence, before OSC tear-down and root destruction, so
+   sampler and reporter threads join cleanly before resources they
+   depend on disappear.
+   File: src/main.py — shutdown step ordering
+
+3. Function hook wrappers were installed but never called because of
+   Python's import semantics. When src/ui/updater.py does
+   `from src.ui.widgets import draw_djm_meter`, the name in
+   updater's namespace points to the ORIGINAL function object, not
+   to whatever the wrapper later puts in src.ui.widgets.draw_djm_meter.
+   The installer was patching the origin module but not the importer
+   modules, so all calls bypassed the wrappers.
+   Solution: after wrapping a function on its origin module, walk
+   every loaded module in sys.modules and replace any attribute that
+   references the original function (by identity comparison) with
+   the wrapper. This works for any caller that uses `from X import Y`.
+   File: src/diagnostics/installer.py — _install_function_hook()
+   rewritten with cross-module patch pass
+
+Performance findings now visible thanks to working diagnostics:
+  - draw_djm_meter: 6423 calls × 7.18ms avg = 46.1s total = 20% of
+    wall time in a 3m 47s session
+  - UI thread running at 28.5 Hz instead of 40 Hz target (28% miss)
+  - System CPU at 83% avg, 90% peak during light use
+  - 22,276 inbound OSC messages in 3m 47s (mostly meter updates)
+  - All 16 instrumented functions now appearing in profiler output
+
+Earlier diagnostics-related fixes from previous commits:
+  - Reporter uses direct file writes, not Python logging module
+    (logging handlers stacked across re-installs causing 70× output
+    duplication)
+  - state.py has explicit _shutting_down flag for shutdown signaling
+  - OSC client hook now deferred — polls for st.osc availability
+    rather than failing silently when install runs before setup_osc()
+  - All 16 hook targets in default.toml validated as installable

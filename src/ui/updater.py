@@ -24,6 +24,7 @@
 """
 
 import time
+import tkinter as tk
 
 from src import state as st
 from src.config import (
@@ -564,4 +565,15 @@ def update_ui(root, lbl):
             set_label(value_lbl, f"fx_value_{slot}", value_string, fg=accent)
 
     # ── RESCHEDULE ──────────────────────────────────────────────────────
-    root.after(cfg.UI_REFRESH_MS, update_ui, root, lbl)
+    # Check shutdown flag before re-scheduling. Without this, after the user
+    # closes the window, Tkinter still has queued update_ui callbacks that
+    # try to operate on the destroyed root and fail with TclError.
+    with st._lock:
+        shutting_down = st.state["_shutting_down"]
+    if not shutting_down:
+        try:
+            root.after(cfg.UI_REFRESH_MS, update_ui, root, lbl)
+        except tk.TclError:
+            # Root was destroyed between our check and the after() call.
+            # This is a benign race during shutdown — just stop scheduling.
+            pass
