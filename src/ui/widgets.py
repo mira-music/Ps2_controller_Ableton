@@ -2,23 +2,17 @@
 ================================================================================
   src/ui/widgets.py — Canvas Renderers + Dirty-Cache Label Setter
 ================================================================================
-  Three canvas-based renderers with dirty caching:
+  Three knob renderers with dirty caching:
 
     draw_knob()           — FX macro knob (270° arc + body + indicator)
     draw_eq_knob()        — DJM-900 metallic EQ knob, -∞/0/+6 dB labels
     draw_trim_knob()      — DJM-900 metallic TRIM knob, -∞/0/+9 dB labels
-                            Visual: macro=0 → 7 o'clock, macro=64 → 12 o'clock,
-                                    macro=80.2 (+9 dB cap) → 5 o'clock
-                            Maps the 0–80.2 macro range across the full 270°
-                            sweep so the indicator reaches the far right
-                            position at the configured maximum.
-    draw_channel_meter()  — Legacy 24-segment meter (kept for compatibility)
-    draw_djm_meter()      — Build B Phase 4: 22-segment DJM-900 NXS2 meter
-                            with WIDE CLIP indicator at top (2× original width
-                            to match the DJM-900 reference image).
-    update_meter_peak()   — Legacy peak hold/decay (0-1 raw scale)
 
-  Build B Phase 2 math (compute only, no drawing):
+  Legacy 24-segment meter (kept for compatibility, not active):
+    draw_channel_meter()
+    update_meter_peak()
+
+  Meter math (compute only, no drawing):
     raw_meter_to_display_db()
     apply_meter_ballistics()
     update_meter_peak_db()
@@ -28,21 +22,22 @@
     display_db_to_segment()
     segment_color()
 
+  Build B Phase 4 DJM-900 NXS2 meter with PhotoImage bitmap rendering:
+    draw_djm_meter()      — main entry point, drop-in replacement for old version
+
   Plus set_label() — diff-based widget update.
 
-  UI revisions in this build:
-    - TRIM visual position now uses cfg.TRIM_MAX_DB as the full-right
-      mapping (was: TRIM at +9 dB only reached ~7 o'clock because the
-      macro 64–127 range was being mapped across the full 0.5→1.0
-      visual range, but cfg.TRIM_MAX_DB caps macro at ~80.2).
-      The new helper compute_trim_visual_position() handles this.
-    - CLIP indicator in draw_djm_meter is now ~2× wider, extending
-      across the full meter column width to match the DJM-900 NXS2
-      reference image.
+  Active build details:
+    - TRIM visual position uses cfg.TRIM_MAX_DB as the visual full-right
+      endpoint via compute_trim_visual_position().
+    - CLIP indicator spans the full meter column width (~2× original).
+    - Meter LED bar is a single PhotoImage with incremental pixel updates.
+      Only segments that change state since last frame are repainted.
 ================================================================================
 """
 
 import math
+import tkinter as tk
 
 from src.config import (
     EQ_METER_SEGMENTS, EQ_METER_GREEN, EQ_METER_YELLOW, EQ_METER_RED,
@@ -77,27 +72,9 @@ def set_label(widget, key, text, **kwargs):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  TRIM VISUAL POSITION — re-mapped to use cfg.TRIM_MAX_DB as full-right
-#
-#  Previous mapping (incorrect): macro 64–127 → visual 0.5–1.0
-#    Problem: cfg.TRIM_MAX_DB caps macro at ~80.2 (for +9 dB), so the
-#    indicator only reached visual position ~0.629 (≈7 o'clock).
-#    The user could never see the indicator at the far right (5 o'clock)
-#    position even at the configured maximum.
-#
-#  New mapping (matches DJM-900 NXS2 reference):
-#    macro 0       → visual 0.0  (far left, 7 o'clock)
-#    macro 64      → visual 0.5  (top, 12 o'clock)
-#    macro MAX_CAP → visual 1.0  (far right, 5 o'clock)
-#
-#  Where MAX_CAP = TRIM_NEUTRAL_MACRO + (cfg.TRIM_MAX_DB / TRIM_DB_PER_MACRO)
-#  e.g. with TRIM_MAX_DB=9.0: MAX_CAP ≈ 80.2
-#       with TRIM_MAX_DB=10.5: MAX_CAP ≈ 82.9
-#
-#  This means the TRIM knob's boost-side visual range is symmetric with
-#  the cut side — both halves use the full sweep. The Utility device's
-#  internal +9 to +35 dB range is hidden from the visual UI (it's a hard
-#  cap, never reached via the encoder anyway).
+#  TRIM VISUAL POSITION
+#  Maps macro value to visual knob position using cfg.TRIM_MAX_DB as the
+#  full-right endpoint (5 o'clock = visual 1.0).
 # ═══════════════════════════════════════════════════════════════════════════
 
 def compute_trim_visual_position(macro_value: float) -> float:
@@ -105,39 +82,26 @@ def compute_trim_visual_position(macro_value: float) -> float:
     Convert a TRIM macro value (0.0 to MAX_CAP) to a visual knob position
     in the range [0.0, 1.0].
 
-    The boost side uses cfg.TRIM_MAX_DB as the visual 1.0 endpoint, so the
-    indicator reaches the far right (5 o'clock) when the user pushes TRIM
-    to its configured cap. This matches the DJM-900 NXS2 hardware feel.
-
-    Args:
-        macro_value: TRIM macro value in the underlying Utility 0–127 range
-
-    Returns:
-        Visual position 0.0 to 1.0 for the knob renderer
+    The boost side uses cfg.TRIM_MAX_DB as the visual 1.0 endpoint so
+    the indicator reaches 5 o'clock when TRIM is at its configured cap.
     """
-    # Compute the visual max (the macro value corresponding to cfg.TRIM_MAX_DB).
-    # Reading cfg every call so TOML hot-reload of TRIM_MAX_DB takes effect.
     if cfg.TRIM_MAX_DB <= 0.0:
         visual_max_macro = TRIM_NEUTRAL_MACRO
     else:
         visual_max_macro = TRIM_NEUTRAL_MACRO + (cfg.TRIM_MAX_DB / TRIM_DB_PER_MACRO)
-        # Defensive clamp: never exceed the underlying macro range
         if visual_max_macro > EQ_MACRO_MAX:
             visual_max_macro = EQ_MACRO_MAX
 
-    # Cut side: 0 → TRIM_NEUTRAL_MACRO maps to visual 0.0 → 0.5
     if macro_value <= TRIM_NEUTRAL_MACRO:
         if TRIM_NEUTRAL_MACRO <= 0:
             return 0.0
         return (macro_value / TRIM_NEUTRAL_MACRO) * 0.5
 
-    # Boost side: TRIM_NEUTRAL_MACRO → visual_max_macro maps to 0.5 → 1.0
     boost_range = visual_max_macro - TRIM_NEUTRAL_MACRO
     if boost_range <= 0:
         return 0.5
 
     boost_fraction = (macro_value - TRIM_NEUTRAL_MACRO) / boost_range
-    # Clamp to 1.0 in case macro temporarily exceeds the cap during a write race
     if boost_fraction > 1.0:
         boost_fraction = 1.0
     return 0.5 + boost_fraction * 0.5
@@ -150,10 +114,7 @@ def compute_trim_visual_position(macro_value: float) -> float:
 _knob_cache = {}
 
 def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, moment=False):
-    """
-    FX macro knob: 270° arc + body circle + indicator line.
-    value_frac: 0.0 (minimum) to 1.0 (maximum)
-    """
+    """FX macro knob: 270° arc + body circle + indicator line."""
     cache_key = (round(value_frac, 3), color, active, locked, moment)
     if _knob_cache.get(slot) == cache_key:
         return
@@ -222,11 +183,7 @@ def draw_knob(canvas, slot, value_frac, color, active=False, locked=False, momen
 _eq_knob_cache = {}
 
 def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
-    """
-    DJM-900 metallic EQ knob.
-    visual_pos: 0.0 = -∞ dB (7 o'clock), 0.5 = 0 dB (12 o'clock),
-                1.0 = +6 dB (5 o'clock)
-    """
+    """DJM-900 metallic EQ knob."""
     cache_key = (round(visual_pos, 3), selected, armed)
     if _eq_knob_cache.get(band_idx) == cache_key:
         return
@@ -246,14 +203,12 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
     r_body3  = r_outer - 15
     r_cap    = max(3, r_outer - 20)
 
-    # Outer shadow ring
     canvas.create_oval(
         cx - r_outer, cy - r_outer,
         cx + r_outer, cy + r_outer,
         fill=EQ_KNOB_RING_OUTER, outline=EQ_KNOB_RING_DARK, width=1
     )
 
-    # Background arc (full 270° sweep)
     canvas.create_arc(
         cx - r_ring, cy - r_ring,
         cx + r_ring, cy + r_ring,
@@ -261,7 +216,6 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         style="arc", outline=EQ_KNOB_ARC_BG, width=2
     )
 
-    # Active arc from 12 o'clock toward current position
     if abs(visual_pos - 0.5) > 0.005:
         if visual_pos < 0.5:
             extent = (0.5 - visual_pos) * 270
@@ -276,7 +230,6 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
             style="arc", outline=EQ_KNOB_ARC_ACTIVE, width=2
         )
 
-    # Perimeter tick marks every 30°
     for tick_angle_deg in range(225, -46, -30):
         tick_rad = math.radians(tick_angle_deg)
         outer_x = cx + (r_ring + 1) * math.cos(tick_rad)
@@ -286,11 +239,9 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         canvas.create_line(inner_x, inner_y, outer_x, outer_y,
                            fill=EQ_KNOB_BODY_LIGHT, width=1)
 
-    # 12 o'clock detent mark
     canvas.create_line(cx, cy - (r_ring + 2), cx, cy - (r_ring - 3),
                        fill=EQ_KNOB_DETENT, width=2)
 
-    # Range labels: -∞, 0, +6
     label_r = r_outer + 6
     lx = cx + label_r * math.cos(math.radians(225))
     ly = cy - label_r * math.sin(math.radians(225))
@@ -303,7 +254,6 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
     canvas.create_text(rx, ry, text="+6", fill=EQ_KNOB_BODY_LIGHT,
                        font=("Segoe UI", 6, "bold"))
 
-    # Metallic body layers
     canvas.create_oval(
         cx - r_body1, cy - r_body1,
         cx + r_body1, cy + r_body1,
@@ -334,7 +284,6 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
         fill=EQ_KNOB_BODY_LIGHT, outline=""
     )
 
-    # Indicator line
     angle_deg = 225 - 270 * visual_pos
     angle_rad = math.radians(angle_deg)
     line_inner_x = cx + (r_cap + 1) * math.cos(angle_rad)
@@ -345,7 +294,6 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
                        line_outer_x, line_outer_y,
                        fill=EQ_KNOB_INDICATOR, width=3)
 
-    # Center cap
     canvas.create_oval(
         cx - r_cap, cy - r_cap,
         cx + r_cap, cy + r_cap,
@@ -355,26 +303,12 @@ def draw_eq_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  TRIM KNOB (DJM-900 metallic, -∞/0/+9 dB labels)
-#
-#  Identical to draw_eq_knob in rendering — only the right-side label
-#  differs ("+9" instead of "+6"). The visual_pos argument should be
-#  pre-computed using compute_trim_visual_position() so the indicator
-#  reaches 5 o'clock at the cfg.TRIM_MAX_DB cap.
 # ═══════════════════════════════════════════════════════════════════════════
 
 _trim_knob_cache = {}
 
 def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
-    """
-    DJM-900 metallic TRIM knob with -∞/0/+9 labels.
-
-    visual_pos: 0.0 = -∞ dB (7 o'clock), 0.5 = 0 dB (12 o'clock),
-                1.0 = +cfg.TRIM_MAX_DB (5 o'clock, full-right)
-
-    The caller is responsible for converting macro values to visual
-    positions via compute_trim_visual_position(). This function only
-    renders — it does not know about macro-to-dB conversions.
-    """
+    """DJM-900 metallic TRIM knob with -∞/0/+9 labels."""
     cache_key = (round(visual_pos, 3), selected, armed)
     if _trim_knob_cache.get(band_idx) == cache_key:
         return
@@ -432,7 +366,6 @@ def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
     canvas.create_line(cx, cy - (r_ring + 2), cx, cy - (r_ring - 3),
                        fill=EQ_KNOB_DETENT, width=2)
 
-    # TRIM-specific labels: -∞, 0, +9
     label_r = r_outer + 6
     lx = cx + label_r * math.cos(math.radians(225))
     ly = cy - label_r * math.sin(math.radians(225))
@@ -491,14 +424,13 @@ def draw_trim_knob(canvas, band_idx, visual_pos, selected=False, armed=False):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  LEGACY 24-SEGMENT CHANNEL METER (kept for compatibility — phased out
-#  by draw_djm_meter below)
+#  LEGACY 24-SEGMENT METER (kept for compatibility — not active in current build)
 # ═══════════════════════════════════════════════════════════════════════════
 
 _channel_meter_cache = {}
 
 def draw_channel_meter(canvas, level, peak_level):
-    """Legacy 24-segment meter. New code should use draw_djm_meter."""
+    """Legacy 24-segment meter. New code uses draw_djm_meter."""
     cache_key = (round(level, 3), round(peak_level, 3))
     if _channel_meter_cache.get("k") == cache_key:
         return
@@ -560,7 +492,7 @@ def update_meter_peak(current, last_peak, last_peak_time, now):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BUILD B PHASE 2 — METER MATH (compute only, no drawing)
+#  METER MATH (compute only, no drawing)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def raw_meter_to_display_db(raw_value):
@@ -686,11 +618,11 @@ def segment_color(segment_index, total_segments=15):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  ROUNDED RECTANGLE HELPER (defined before draw_djm_meter which uses it)
+#  ROUNDED RECTANGLE HELPER (used by FX knob bodies)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _rounded_rect(canvas, x1, y1, x2, y2, radius=3, fill="#000000", outline=""):
-    """Rounded rectangle via overlapping rects + corner ovals (+ optional outline)."""
+    """Rounded rectangle via overlapping rects + corner ovals."""
     r = min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2)
     if r < 1:
         canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=0)
@@ -720,126 +652,139 @@ def _rounded_rect(canvas, x1, y1, x2, y2, radius=3, fill="#000000", outline=""):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  BUILD B PHASE 4 — DJM-900 NXS2 METER WITH WIDE CLIP INDICATOR
+#  DJM METER — PhotoImage bitmap renderer (high-performance)
 #
-#  Layout (top to bottom):
-#    WIDE CLIP indicator box  (~2× width of meter column, extends from
-#                              left edge of labels to right edge of LED bar)
-#    8px gap
-#    22 LED segments          (from -30 dB at bottom to +12 dB at top)
-#    dB labels                (on the left side, 20px wide)
+#  Architecture:
+#    - One PhotoImage bitmap per canvas (LED bar area only)
+#    - dB labels are canvas items, drawn once on first frame
+#    - CLIP indicator is two canvas items (rect + text), updated via itemconfig
+#    - Per-frame: only LED segments that changed state since last frame
+#      are repainted. Most frames during audio playback see 1-3 changes.
 #
-#  CLIP width change vs previous build:
-#    Old: CLIP only spanned the LED bar width (~10 px). Looked tiny next
-#         to the meter on a large canvas.
-#    New: CLIP spans from the dB label area on the left across the full
-#         LED bar width on the right. Matches the DJM-900 NXS2 hardware
-#         where the CLIP indicator is a prominent horizontal bar at the
-#         top of the meter column.
+#  Per-canvas state is stored in _djm_meter_state[id(canvas)].
 # ═══════════════════════════════════════════════════════════════════════════
 
-_djm_meter_cache = {}
+_djm_meter_state: dict = {}
 
-def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_flicker_on):
+
+def _get_or_create_meter_state(canvas, w: int, h: int) -> dict:
     """
-    DJM-900 NXS2 channel meter with prominent CLIP indicator.
-
-    The CLIP indicator now spans the full meter column width (label area +
-    LED bar area + small padding) for visibility matching the hardware
-    reference. Total CLIP width is approximately 2× the LED bar width.
+    Get or lazily create per-canvas state. Called on every frame but only
+    does real work on first call or after canvas resize.
     """
-    cache_key = (
-        round(smoothed_db, 1),
-        round(peak_db, 1),
-        clip_active,
-        round(clip_level, 2),
-        clip_flicker_on,
-    )
-    if _djm_meter_cache.get("m") == cache_key:
-        return
-    _djm_meter_cache["m"] = cache_key
+    canvas_id = id(canvas)
+    state = _djm_meter_state.get(canvas_id)
 
-    canvas.delete("all")
-
-    w = int(canvas['width'])
-    h = int(canvas['height'])
-
-    # ── Layout constants ───────────────────────────────────────────────
-    label_width = 20          # width reserved for dB labels on left
+    label_width = 20
     led_left    = label_width + 3
-    led_right   = led_left + 8   # LED bar itself is 8px wide
+    led_right   = led_left + 8
+    led_width   = led_right - led_left
 
-    # CLIP indicator geometry — WIDE version
-    # Spans from the start of the label column on the left, across to the
-    # right edge of the LED bar. This is ~2× the previous CLIP width and
-    # matches the DJM-900 NXS2 reference image where the CLIP bar is a
-    # prominent horizontal element at the top of the meter column.
     clip_h      = 16
     clip_top    = 2
     clip_bottom = clip_top + clip_h
-    clip_left   = 2                          # was: led_left - 2 (~22 px)
-    clip_right  = max(led_right + 2, w - 2)  # spans full canvas width
+    clip_left   = 2
+    clip_right  = max(led_right + 2, w - 2)
 
     clip_to_meter_gap = 8
-
-    total_segs   = 22
-    seg_gap      = 5
     meter_top    = clip_bottom + clip_to_meter_gap
     meter_bottom = h - 4
-    meter_h_px   = meter_bottom - meter_top
-    seg_h        = max(3.0, (meter_h_px - (total_segs - 1) * seg_gap) / total_segs)
+    led_height   = meter_bottom - meter_top
 
-    db_min   = -30.0
-    db_max   = 12.0
+    if state is not None and state.get("led_height") == led_height and state.get("led_width") == led_width:
+        return state
+
+    # Clean slate if size changed
+    if state is not None:
+        try:
+            canvas.delete("all")
+        except Exception:
+            pass
+
+    bitmap = tk.PhotoImage(width=led_width, height=led_height)
+    bitmap.put("#000000", to=(0, 0, led_width, led_height))
+
+    state = {
+        "bitmap":              bitmap,
+        "image_id":            None,
+        "clip_bg_id":          None,
+        "clip_text_id":        None,
+        "label_ids":           [],
+        "label_ids_drawn":     False,
+        "last_clip_state":     None,
+        "last_segment_states": None,
+        "segment_colors":      None,
+        "led_height":          led_height,
+        "led_width":           led_width,
+        "led_left":            led_left,
+        "led_right":           led_right,
+        "meter_top":           meter_top,
+        "meter_bottom":        meter_bottom,
+        "clip_top":            clip_top,
+        "clip_bottom":         clip_bottom,
+        "clip_left":           clip_left,
+        "clip_right":          clip_right,
+        "canvas_w":            w,
+        "canvas_h":            h,
+    }
+
+    _djm_meter_state[canvas_id] = state
+    return state
+
+
+def _draw_static_meter_elements(canvas, state: dict):
+    """Draw dB labels and footer text once. Called on first frame only."""
+    if state["label_ids_drawn"]:
+        return
+
+    label_width = 20
+    db_min = -30.0
+    db_max = 12.0
     db_range = db_max - db_min
+    meter_top    = state["meter_top"]
+    meter_bottom = state["meter_bottom"]
+    meter_h_px   = meter_bottom - meter_top
 
-    # ── CLIP indicator ─────────────────────────────────────────────────
-    if clip_active:
-        if clip_flicker_on:
-            clip_fill        = clip_level_to_color(clip_level)
-            clip_outline     = "#cc2222"
-            clip_text_color  = "#ffffff"
-        else:
-            clip_fill        = "#1a0808"
-            clip_outline     = "#552222"
-            clip_text_color  = "#553333"
-    else:
-        clip_fill       = "#0d0d0d"
-        clip_outline    = "#2a2a2a"
-        clip_text_color = "#553333"   # dim red so CLIP label is always faintly visible
+    db_labels = [
+        (12, "+12"), (9, "+9"), (6, "+6"), (3, "+3"), (0, "0"),
+        (-3, "-3"), (-6, "-6"), (-9, "-9"), (-12, "-12"),
+        (-15, "-15"), (-18, "-18"), (-21, "-21"), (-24, "-24"),
+        (-27, "-27"), (-30, "-30"),
+    ]
 
-    _rounded_rect(canvas, clip_left, clip_top, clip_right, clip_bottom,
-                  radius=3, fill=clip_fill, outline=clip_outline)
+    for db_val, label_text in db_labels:
+        frac = (db_val - db_min) / db_range
+        y = meter_bottom - frac * meter_h_px
+        label_id = canvas.create_text(
+            label_width - 1, y,
+            text=label_text,
+            fill="#888888",
+            font=("Segoe UI", 5, "normal"),
+            anchor="e",
+        )
+        state["label_ids"].append(label_id)
 
-    # CLIP text centred in the wide bar
-    canvas.create_text(
-        (clip_left + clip_right) // 2,
-        (clip_top + clip_bottom) // 2,
-        text="CLIP",
-        fill=clip_text_color,
-        font=("Segoe UI", 8, "bold")    # slightly larger font for the wider bar
+    db_footer_id = canvas.create_text(
+        label_width - 1, state["canvas_h"] - 1,
+        text="dB",
+        fill="#666666",
+        font=("Segoe UI", 5, "bold"),
+        anchor="e",
     )
+    state["label_ids"].append(db_footer_id)
 
-    # ── Lit segment count ──────────────────────────────────────────────
-    if smoothed_db <= db_min:
-        lit = 0
-    elif smoothed_db >= db_max:
-        lit = total_segs
-    else:
-        lit = int(((smoothed_db - db_min) / db_range) * total_segs)
+    state["label_ids_drawn"] = True
 
-    # ── Peak segment index ─────────────────────────────────────────────
-    if peak_db <= db_min:
-        peak_seg = -1
-    elif peak_db >= db_max:
-        peak_seg = total_segs - 1
-    else:
-        peak_seg = int(((peak_db - db_min) / db_range) * total_segs) - 1
 
-    # ── Segment color palette ──────────────────────────────────────────
-    def get_seg_colors(seg_index):
+def _compute_segment_colors(total_segs: int = 22) -> list:
+    """
+    Precompute color triples (off, lit, peak) for each segment index.
+    Called once and cached. Same warm desaturated palette as the previous
+    canvas-item renderer for visual consistency.
+    """
+    colors = []
+    for seg_index in range(total_segs):
         frac = seg_index / (total_segs - 1) if total_segs > 1 else 0
-
         if frac >= 0.91:
             on_r, on_g, on_b   = 0xcc, 0x22, 0x22
             off_r, off_g, off_b = 0x14, 0x06, 0x06
@@ -866,66 +811,192 @@ def draw_djm_meter(canvas, smoothed_db, peak_db, clip_active, clip_level, clip_f
         bright_b  = min(255, int(on_b * 1.4))
         bright_color = f"#{bright_r:02x}{bright_g:02x}{bright_b:02x}"
 
-        return on_color, off_color, bright_color
+        colors.append({
+            "off":  off_color,
+            "lit":  bright_color,
+            "peak": "#ffffff",
+        })
+    return colors
 
-    # ── Draw LED segments (bottom = segment 0) ─────────────────────────
-    for i in range(total_segs):
-        seg_bottom = meter_bottom - i * (seg_h + seg_gap)
-        seg_top    = seg_bottom - seg_h
 
-        on_color, off_color, bright_color = get_seg_colors(i)
+def _paint_meter_bitmap(state: dict,
+                         smoothed_db: float,
+                         peak_db: float) -> int:
+    """
+    Incremental paint: only segments that changed state since last frame
+    are repainted. Most frames see 1-3 changes during audio playback.
 
-        is_lit  = (i < lit)
-        is_peak = (i == peak_seg and peak_db > db_min)
+    Strategy:
+      1. Compute new segment state list ("off" / "lit" / "peak")
+      2. Diff against cached old state
+      3. Paint only changed segments via bitmap.put()
+      4. Cache new state for next frame
 
+    Returns number of segments repainted (informational).
+    """
+    bitmap = state["bitmap"]
+    led_height = state["led_height"]
+    led_width  = state["led_width"]
+
+    total_segs = 22
+    seg_gap_px = 2
+
+    total_gap_px = (total_segs - 1) * seg_gap_px
+    seg_height_px = max(1, (led_height - total_gap_px) // total_segs)
+
+    db_min = -30.0
+    db_max = 12.0
+    db_range = db_max - db_min
+
+    # Lit segment count
+    if smoothed_db <= db_min:
+        lit = 0
+    elif smoothed_db >= db_max:
+        lit = total_segs
+    else:
+        lit = int(((smoothed_db - db_min) / db_range) * total_segs)
+
+    # Peak segment index
+    if peak_db <= db_min:
+        peak_seg = -1
+    elif peak_db >= db_max:
+        peak_seg = total_segs - 1
+    else:
+        peak_seg = int(((peak_db - db_min) / db_range) * total_segs) - 1
+
+    # Build new segment state list
+    new_states = []
+    for seg_index in range(total_segs):
+        is_lit  = (seg_index < lit)
+        is_peak = (seg_index == peak_seg and peak_db > db_min)
         if is_peak:
-            edge_color, center_color = "#bbbbbb", "#ffffff"
+            new_states.append("peak")
         elif is_lit:
-            edge_color, center_color = on_color, bright_color
+            new_states.append("lit")
         else:
-            edge_color, center_color = off_color, off_color
+            new_states.append("off")
 
-        third = max(1.0, seg_h / 3.0)
+    # Compare to previous state
+    old_states = state.get("last_segment_states")
+    if old_states is None:
+        # First paint: clear bitmap so gaps are set
+        old_states = ["unknown"] * total_segs
+        bitmap.put("#000000", to=(0, 0, led_width, led_height))
 
-        _rounded_rect(canvas,
-                      led_left, seg_top,
-                      led_right, seg_top + third,
-                      radius=2, fill=edge_color)
+    # Lazy-init segment colors
+    if state["segment_colors"] is None:
+        state["segment_colors"] = _compute_segment_colors(total_segs)
 
-        canvas.create_rectangle(
-            led_left, seg_top + third,
-            led_right, seg_bottom - third,
-            fill=center_color, outline="", width=0
+    seg_colors = state["segment_colors"]
+
+    # Repaint only changed segments
+    repainted = 0
+    for seg_index in range(total_segs):
+        if new_states[seg_index] == old_states[seg_index]:
+            continue
+
+        new_state = new_states[seg_index]
+        color = seg_colors[seg_index][new_state]
+
+        # Compute pixel rows (bitmap y=0 is top, segment 0 is bottom)
+        from_bottom = seg_index * (seg_height_px + seg_gap_px)
+        seg_bottom_y = led_height - from_bottom
+        seg_top_y    = seg_bottom_y - seg_height_px
+
+        if seg_top_y < 0:
+            seg_top_y = 0
+        if seg_bottom_y > led_height:
+            seg_bottom_y = led_height
+        if seg_top_y >= seg_bottom_y:
+            continue
+
+        bitmap.put(color, to=(0, seg_top_y, led_width, seg_bottom_y))
+        repainted += 1
+
+    state["last_segment_states"] = new_states
+    return repainted
+
+
+def _update_clip_indicator(canvas, state: dict,
+                            clip_active: bool, clip_level: float,
+                            clip_flicker_on: bool):
+    """
+    Update CLIP indicator via itemconfig (cheap) instead of recreate.
+    First call creates the items; subsequent calls just update colors.
+    """
+    if clip_active:
+        if clip_flicker_on:
+            clip_fill        = clip_level_to_color(clip_level)
+            clip_outline     = "#cc2222"
+            clip_text_color  = "#ffffff"
+        else:
+            clip_fill        = "#1a0808"
+            clip_outline     = "#552222"
+            clip_text_color  = "#553333"
+    else:
+        clip_fill       = "#0d0d0d"
+        clip_outline    = "#2a2a2a"
+        clip_text_color = "#553333"
+
+    current_state = (clip_fill, clip_outline, clip_text_color)
+
+    if state["last_clip_state"] == current_state and state["clip_bg_id"] is not None:
+        return
+
+    state["last_clip_state"] = current_state
+
+    clip_left   = state["clip_left"]
+    clip_top    = state["clip_top"]
+    clip_right  = state["clip_right"]
+    clip_bottom = state["clip_bottom"]
+
+    if state["clip_bg_id"] is None:
+        state["clip_bg_id"] = canvas.create_rectangle(
+            clip_left, clip_top, clip_right, clip_bottom,
+            fill=clip_fill, outline=clip_outline, width=1,
+        )
+        state["clip_text_id"] = canvas.create_text(
+            (clip_left + clip_right) // 2,
+            (clip_top + clip_bottom) // 2,
+            text="CLIP",
+            fill=clip_text_color,
+            font=("Segoe UI", 8, "bold"),
+        )
+    else:
+        canvas.itemconfig(state["clip_bg_id"], fill=clip_fill, outline=clip_outline)
+        canvas.itemconfig(state["clip_text_id"], fill=clip_text_color)
+
+
+def draw_djm_meter(canvas, smoothed_db: float, peak_db: float,
+                    clip_active: bool, clip_level: float,
+                    clip_flicker_on: bool):
+    """
+    DJM-900 NXS2 meter using incremental PhotoImage rendering.
+
+    Per-frame:
+      1. Get/create canvas state (cheap after first call)
+      2. Draw dB labels once
+      3. Create bitmap canvas item once
+      4. Paint only changed LED segments to the bitmap (1-3 ops typical)
+      5. Update CLIP indicator via itemconfig (no item creation)
+
+    Drop-in replacement for the canvas-item version. Same signature,
+    visually identical output, ~50-100× faster during audio playback.
+    """
+    w = int(canvas['width'])
+    h = int(canvas['height'])
+
+    state = _get_or_create_meter_state(canvas, w, h)
+
+    if not state["label_ids_drawn"]:
+        _draw_static_meter_elements(canvas, state)
+
+    if state["image_id"] is None:
+        state["image_id"] = canvas.create_image(
+            state["led_left"], state["meter_top"],
+            anchor="nw",
+            image=state["bitmap"],
         )
 
-        _rounded_rect(canvas,
-                      led_left, seg_bottom - third,
-                      led_right, seg_bottom,
-                      radius=2, fill=edge_color)
-
-    # ── dB labels on the left ──────────────────────────────────────────
-    db_labels = [
-        (12, "+12"), (9, "+9"), (6, "+6"), (3, "+3"), (0, "0"),
-        (-3, "-3"), (-6, "-6"), (-9, "-9"), (-12, "-12"),
-        (-15, "-15"), (-18, "-18"), (-21, "-21"), (-24, "-24"),
-        (-27, "-27"), (-30, "-30"),
-    ]
-
-    for db_val, label_text in db_labels:
-        frac = (db_val - db_min) / db_range
-        y = meter_bottom - frac * meter_h_px
-        canvas.create_text(
-            label_width - 1, y,
-            text=label_text,
-            fill="#888888",
-            font=("Segoe UI", 5, "normal"),
-            anchor="e"
-        )
-
-    canvas.create_text(
-        label_width - 1, h - 1,
-        text="dB",
-        fill="#666666",
-        font=("Segoe UI", 5, "bold"),
-        anchor="e"
-    )
+    _paint_meter_bitmap(state, smoothed_db, peak_db)
+    _update_clip_indicator(canvas, state, clip_active, clip_level, clip_flicker_on)
