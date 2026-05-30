@@ -51,11 +51,11 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════════════════
 
 KNOWN_THREAD_TARGETS = {
-    "ui":         40.0,    # Tkinter UI update loop
-    "controller": 125.0,   # pygame event loop @ 8 ms wait
-    "polling":    6.6,     # OSC polling loop @ 150 ms sleep
-    "eq_ramp":    62.5,    # EQ ramp loop @ 16 ms tick
-    "watchdog":   1.0,     # Controller watchdog
+    "ui":         40.0,
+    "controller": 125.0,
+    "polling":    2.0,   # was 6.6, lowered after listener-based session updates
+    "eq_ramp":    62.5,
+    "watchdog":   1.0,
 }
 
 

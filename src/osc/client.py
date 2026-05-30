@@ -2,6 +2,11 @@
 ================================================================================
   src/osc/client.py — OSC Send Functions
 ================================================================================
+  Build B revisions:
+    - Added osc_register_session_listeners() and osc_stop_session_listeners()
+      to subscribe to session-level state changes (tempo, transport, counts,
+      track volume) via AbletonOSC's listener mechanism instead of polling.
+================================================================================
 """
 
 import time
@@ -81,10 +86,6 @@ def osc_query_position():
     st.osc.send_message("/live/clip/get/color",   [track, scene])
 
 def schedule_position_query():
-    """
-    Schedule a deferred position query. Acquires lock for consistency
-    with the rest of the codebase's locking discipline.
-    """
     with st._lock:
         st.state["_query_requested_at"] = time.perf_counter()
 
@@ -92,11 +93,8 @@ def osc_query_group_previews():
     with st._lock:
         groups = list(st.state["groups"])
         gc     = st.state["group_cursor"]
-
-    # Guard: if no groups exist, nothing to preview
     if not groups:
         return
-
     if gc + 1 < len(groups):
         st.osc.send_message("/live/track/get/name", [groups[gc + 1]["track_index"]])
     if gc - 1 >= 0:
@@ -109,7 +107,70 @@ def osc_query_scene_color(scene_idx):
     st.osc.send_message("/live/scene/get/color", [scene_idx])
 
 
-# ── FX RACK QUERIES ──────────────────────────────────────────────────────
+# ── SESSION LISTENERS — replaces high-frequency polling ─────────────────
+
+def osc_register_session_listeners():
+    """
+    Register listeners for session-level state that changes rarely:
+      - tempo
+      - is_playing (transport state)
+      - num_tracks
+      - num_scenes
+
+    These were previously polled every 150ms. With listeners, Ableton
+    pushes updates only when values change, eliminating ~30 OSC messages
+    per second of useless background traffic.
+
+    Called once during fetch_all_names() after track/scene discovery.
+    """
+    if st.osc is None:
+        return
+    try:
+        st.osc.send_message("/live/song/start_listen/tempo", [])
+        st.osc.send_message("/live/song/start_listen/is_playing", [])
+        st.osc.send_message("/live/song/start_listen/num_tracks", [])
+        st.osc.send_message("/live/song/start_listen/num_scenes", [])
+        log.info("Session listeners registered (tempo, transport, counts)")
+    except Exception as e:
+        log.warning(f"Session listener register failed: {e}")
+
+
+def osc_stop_session_listeners():
+    """Unregister session-level listeners. Called on shutdown and refresh."""
+    if st.osc is None:
+        return
+    try:
+        st.osc.send_message("/live/song/stop_listen/tempo", [])
+        st.osc.send_message("/live/song/stop_listen/is_playing", [])
+        st.osc.send_message("/live/song/stop_listen/num_tracks", [])
+        st.osc.send_message("/live/song/stop_listen/num_scenes", [])
+    except Exception:
+        pass
+
+
+def osc_register_track_volume_listener(track_idx):
+    """
+    Listen for volume changes on a specific track. Used for the current
+    selected track so we don't have to poll its volume continuously.
+    """
+    if st.osc is None or track_idx < 0:
+        return
+    try:
+        st.osc.send_message("/live/track/start_listen/volume", [track_idx])
+    except Exception as e:
+        log.warning(f"Track volume listener register failed: {e}")
+
+
+def osc_stop_track_volume_listener(track_idx):
+    if st.osc is None or track_idx < 0:
+        return
+    try:
+        st.osc.send_message("/live/track/stop_listen/volume", [track_idx])
+    except Exception:
+        pass
+
+
+# ── FX RACK QUERIES ────────────────────────────────────────────────────
 
 def osc_query_fx_macro_names():
     with st._lock:
@@ -144,14 +205,9 @@ def osc_query_fx_macro_maxs():
                         [track_idx, FX_RACK_DEVICE_INDEX])
 
 def osc_query_fx_macro_value_strings():
-    """
-    Query display strings for all discovered FX macros.
-    Uses fx_macro_param_ids (was incorrectly using eq_macro_param_ids).
-    Snapshot all needed state in one lock acquisition.
-    """
     with st._lock:
         track_idx = st.state["fx_track_index"]
-        param_ids = list(st.state["fx_macro_param_ids"])   # FX, not EQ
+        param_ids = list(st.state["fx_macro_param_ids"])
         names     = list(st.state["fx_macro_names"])
         ready     = st.state["fx_ready"]
     if track_idx < 0 or not ready:
@@ -163,7 +219,7 @@ def osc_query_fx_macro_value_strings():
                             [track_idx, FX_RACK_DEVICE_INDEX, pid])
 
 
-# ── FX LISTENERS ─────────────────────────────────────────────────────────
+# ── FX LISTENERS ───────────────────────────────────────────────────────
 
 def osc_register_fx_listeners():
     with st._lock:
@@ -207,13 +263,9 @@ def osc_stop_fx_listeners():
     log.info("FX listeners stopped")
 
 
-# ── FX WRITES ────────────────────────────────────────────────────────────
+# ── FX WRITES ──────────────────────────────────────────────────────────
 
 def osc_set_fx_macro(slot, value):
-    """
-    Write an FX macro value to Ableton.
-    Guards: track_idx >= 0, slot in range, param_id >= 0 (not yet discovered).
-    """
     with st._lock:
         track_idx = st.state["fx_track_index"]
         param_ids = list(st.state["fx_macro_param_ids"])
@@ -222,14 +274,13 @@ def osc_set_fx_macro(slot, value):
     if slot < 0 or slot >= len(param_ids):
         return
     param_id = param_ids[slot]
-    # Guard: param_id -1 means macro not yet discovered — don't send garbage
     if param_id < 0:
         return
     st.osc.send_message("/live/device/set/parameter/value",
                         [track_idx, FX_RACK_DEVICE_INDEX, param_id, float(value)])
 
 
-# ── EQ RACK QUERIES ──────────────────────────────────────────────────────
+# ── EQ RACK QUERIES ────────────────────────────────────────────────────
 
 def osc_query_eq_macro_names():
     with st._lock:
@@ -264,7 +315,6 @@ def osc_query_eq_macro_maxs():
                         [track_idx, EQ_RACK_DEVICE_INDEX])
 
 def osc_query_eq_macro_value_strings():
-    """Single lock acquisition for all needed state."""
     with st._lock:
         track_idx = st.state["eq_track_index"]
         param_ids = list(st.state["eq_macro_param_ids"])
@@ -279,7 +329,7 @@ def osc_query_eq_macro_value_strings():
                             [track_idx, EQ_RACK_DEVICE_INDEX, pid])
 
 
-# ── EQ LISTENERS ─────────────────────────────────────────────────────────
+# ── EQ LISTENERS ───────────────────────────────────────────────────────
 
 def osc_register_eq_listeners():
     with st._lock:
@@ -323,13 +373,9 @@ def osc_stop_eq_listeners():
     log.info("EQ listeners stopped")
 
 
-# ── EQ WRITES ────────────────────────────────────────────────────────────
+# ── EQ WRITES ──────────────────────────────────────────────────────────
 
 def osc_set_eq_macro(slot, value):
-    """
-    Write an EQ macro value to Ableton.
-    Guards: track_idx >= 0, slot in range, param_id >= 0.
-    """
     with st._lock:
         track_idx = st.state["eq_track_index"]
         param_ids = list(st.state["eq_macro_param_ids"])
@@ -338,14 +384,13 @@ def osc_set_eq_macro(slot, value):
     if slot < 0 or slot >= len(param_ids):
         return
     param_id = param_ids[slot]
-    # Guard: param_id -1 means macro not yet discovered
     if param_id < 0:
         return
     st.osc.send_message("/live/device/set/parameter/value",
                         [track_idx, EQ_RACK_DEVICE_INDEX, param_id, float(value)])
 
 
-# ── EQ TRACK OUTPUT METER ────────────────────────────────────────────────
+# ── EQ TRACK OUTPUT METER ──────────────────────────────────────────────
 
 def osc_register_eq_meter_listener():
     with st._lock:

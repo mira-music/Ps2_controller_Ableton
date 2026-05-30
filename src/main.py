@@ -149,7 +149,10 @@ def main():
         # will fire on our server thread. Wrapped in try/except so a
         # failure for one listener doesn't prevent the others from
         # being unregistered.
+        #........................................................
         try:
+            from src.osc.client import osc_stop_session_listeners
+            osc_stop_session_listeners()
             osc_stop_fx_listeners()
             osc_stop_eq_listeners()
             osc_stop_eq_meter_listener()

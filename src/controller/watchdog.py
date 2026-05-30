@@ -12,6 +12,12 @@
 
   All three are [LIVE] — they're read on every loop iteration, so TOML
   changes take effect on the next tick (within 1-2 seconds of reload).
+
+  Build B revisions:
+    - watchdog_loop now ticks the diagnostics health monitor on each
+      iteration via record_thread_tick("watchdog"). No-op when
+      diagnostics is disabled. Allows the analyzer to verify this
+      thread is running at its target ~1 Hz.
 ================================================================================
 """
 
@@ -94,7 +100,7 @@ def reprobe_controller(reason="watchdog"):
         return None
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  WATCHDOG LOOP (1 Hz daemon thread)
+#  WATCHDOG LOOP (~1 Hz daemon thread)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def watchdog_loop():
@@ -106,6 +112,17 @@ def watchdog_loop():
       cfg.IDLE_REPROBE_AFTER  — silence threshold before deep check
     """
     while True:
+        # ── Diagnostics heartbeat ──────────────────────────────────────
+        # Reports one tick per loop iteration to the thread health monitor.
+        # Lets the analyzer verify this thread is running at its target
+        # ~1 Hz. Wrapped in try/except so a diagnostics failure never
+        # breaks the watchdog. No-op when diagnostics is disabled.
+        try:
+            from src.diagnostics import record_thread_tick
+            record_thread_tick("watchdog")
+        except Exception:
+            pass
+
         try:
             time.sleep(cfg.WATCHDOG_INTERVAL)
             now = time.perf_counter()

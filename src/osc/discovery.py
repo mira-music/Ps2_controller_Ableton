@@ -2,6 +2,12 @@
 ================================================================================
   src/osc/discovery.py — Session Discovery
 ================================================================================
+  Build B revisions:
+    - Now registers session-level listeners (tempo, transport, counts)
+      so polling no longer needs to query them at 6.6 Hz
+    - Calls osc_stop_*_listeners() at start of fetch_all_names() to
+      prevent listener leak on repeated refreshes
+================================================================================
 """
 
 import time
@@ -22,6 +28,11 @@ from src.osc.client import (
     osc_register_fx_listeners,
     osc_register_eq_listeners,
     osc_register_eq_meter_listener,
+    osc_register_session_listeners,
+    osc_stop_session_listeners,
+    osc_stop_fx_listeners,
+    osc_stop_eq_listeners,
+    osc_stop_eq_meter_listener,
     osc_query_track_color,
     osc_query_group_previews,
 )
@@ -32,11 +43,11 @@ log = get_logger(__name__)
 
 def fetch_all_names():
     """
-    Full session discovery. Called once at startup and again on
-    SELECT+START manual refresh.
+    Full session discovery. Called once at startup and on manual refresh.
 
-    Resets fx_ready and eq_ready at the start to prevent stale param IDs
-    from being used during the ~0.4s rediscovery window.
+    Now properly unregisters all existing listeners at the start so
+    repeated refreshes don't cause listener leaks (each refresh would
+    otherwise accumulate another set of listeners with Ableton).
     """
     if not st._fetch_lock.acquire(blocking=False):
         log.info("Fetch already running — skipping")
@@ -48,6 +59,28 @@ def fetch_all_names():
             st.state["fx_ready"] = False
             st.state["eq_ready"] = False
 
+        # ── Unregister existing listeners BEFORE rediscovery ──
+        # Without this, repeated refreshes accumulate listener
+        # registrations with Ableton and each parameter change fires
+        # multiple times. The stop functions are idempotent (no-op if
+        # not registered) so this is safe on the first call.
+        try:
+            osc_stop_session_listeners()
+        except Exception as e:
+            log.warning(f"Failed to stop old session listeners: {e}")
+        try:
+            osc_stop_fx_listeners()
+        except Exception as e:
+            log.warning(f"Failed to stop old FX listeners: {e}")
+        try:
+            osc_stop_eq_listeners()
+        except Exception as e:
+            log.warning(f"Failed to stop old EQ listeners: {e}")
+        try:
+            osc_stop_eq_meter_listener()
+        except Exception as e:
+            log.warning(f"Failed to stop old meter listener: {e}")
+
         log.info("Requesting session counts…")
         st.osc.send_message("/live/song/get/num_scenes", [])
         st.osc.send_message("/live/song/get/num_tracks", [])
@@ -58,7 +91,12 @@ def fetch_all_names():
             tc = st.state["_real_track_count"]
         log.info(f"Session: {sc} scenes, {tc} tracks")
 
-        # ─── Fetch all scene names + colors ───
+        # ── Register session listeners EARLY ──
+        # tempo, is_playing, num_tracks, num_scenes — Ableton will push
+        # updates when these change, eliminating ~30 OSC msgs/sec of polling.
+        osc_register_session_listeners()
+
+        # ── Fetch all scene names + colors ──
         log.info("Fetching scene names + colors…")
         for i in range(sc):
             st.osc.send_message("/live/scene/get/name",  [i])
@@ -67,7 +105,7 @@ def fetch_all_names():
         time.sleep(0.4)
         rebuild_bookmarks()
 
-        # ─── Fetch all track names + colors ───
+        # ── Fetch all track names + colors ──
         log.info("Fetching track names + colors…")
         for i in range(tc):
             st.osc.send_message("/live/track/get/name",  [i])
@@ -84,7 +122,7 @@ def fetch_all_names():
             bm_count = len(st.state["bookmarks"])
             gr_count = len(st.state["groups"])
 
-        # ─── Load FX macros if found ───
+        # ── Load FX macros ──
         if fx_idx >= 0:
             log.info(f"Loading FX macro metadata from track {fx_idx}…")
             osc_query_fx_macro_names()
@@ -100,7 +138,7 @@ def fetch_all_names():
             osc_register_fx_listeners()
             osc_query_track_color(fx_idx)
 
-        # ─── Load EQ macros if found ───
+        # ── Load EQ macros ──
         if eq_idx >= 0:
             log.info(f"Loading EQ macro metadata from track {eq_idx}…")
             osc_query_eq_macro_names()
@@ -130,14 +168,7 @@ def fetch_all_names():
 
 
 def rebuild_bookmarks():
-    """
-    Scan all scene names; find those starting with § prefix.
-    Result is sorted ascending by scene_index (guaranteed by enumerate order).
-    _sync_bookmark_cursor_locked relies on this sort order for its break.
-
-    Bookmark dict format (ESTABLISHED CONVENTION — DO NOT CHANGE):
-      {"scene_index": int, "name": str}
-    """
+    """Scan scene names for § prefix. Sorted ascending by scene_index."""
     with st._lock:
         scenes = list(st.ableton["all_scene_names"])
 
@@ -153,12 +184,7 @@ def rebuild_bookmarks():
 
 
 def rebuild_groups():
-    """
-    Scan all track names; find those starting with * prefix.
-
-    Group dict format (ESTABLISHED CONVENTION — DO NOT CHANGE):
-      {"track_index": int, "name": str}
-    """
+    """Scan track names for * prefix."""
     with st._lock:
         tracks = list(st.ableton["all_track_names"])
 
@@ -217,13 +243,7 @@ def rebuild_eq_track():
 
 def _sync_bookmark_cursor_locked(scene_idx):
     """
-    Called with st._lock held. Do not call from unlocked context.
-
-    Move bookmark cursor to point at the bookmark that owns the given
-    scene index. Bookmarks are sorted ascending by scene_index (guaranteed
-    by rebuild_bookmarks iterating enumerate(all_scene_names) in order),
-    so the break is safe — once we see a bookmark past our scene, all
-    subsequent ones will also be past it.
+    Called with st._lock held. Bookmarks are sorted ascending by scene_index.
     """
     bookmarks = st.state["bookmarks"]
     cur_cursor = st.state["bookmark_cursor"]
