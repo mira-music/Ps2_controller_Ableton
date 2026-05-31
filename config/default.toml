@@ -404,12 +404,12 @@ detent_min_factor = 0.30
 # typically -18 dBFS in digital. This offset shifts the display.
 #
 #   +6 = very hot reference (rarely shows red zone)
-#   +9 = broadcast/mastering standard (current default)
+#   +10.5 = broadcast/mastering standard (current default)
 #   +15 = quiet reference (everything looks loud)
 #
 # Lower this if your mixes show too much red, raise it if they show too little.
 #
-reference_offset_db = 8.7
+reference_offset_db = 10.5
 
 # [LIVE] How fast the meter falls back down after the signal drops (dB per second).
 #
