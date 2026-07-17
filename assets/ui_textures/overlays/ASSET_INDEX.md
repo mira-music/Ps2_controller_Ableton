@@ -1,24 +1,54 @@
 # Overlay asset index
 
-The original contact sheets are retained under `contact_sheets/`. Their elements are also exported as separate files so they can be placed directly in Photoshop.
+Every file outside `contact_sheets/` contains **one complete centred element only**. The contact sheets are retained as source/reference material and are not intended for direct placement.
 
-## Paper labels
+## Paper labels — `paper_labels/`
 
-`paper_labels/` contains blank torn-label pieces: large, round, wide, long-strip, thin-strip, folded, and several fragments.
+Six complete, pre-aged blank paper elements:
 
-## Music stickers
+- `label_large.png`
+- `label_round.png`
+- `label_strip_long.png`
+- `label_strip_thin.png`
+- `label_wide.png`
+- `label_folded.png`
 
-`music_stickers/` contains one PNG each for: waveform, cassette, turntable, patch grid, audio jack, equalizer, transport arrows, vinyl record, speaker stack, fader bank, red waveform, and LED matrix.
+Each includes light fibre, crease, and wear detail while keeping an empty area for a custom Photoshop label.
 
-## Tape
+## Music stickers — `music_stickers/`
 
-- `tape/blank/` contains individual masking, gaffer, translucent, and foil repair pieces.
-- `tape/marked/` contains the first exact-name hand-marker labels: `FX MACHINE` and `MODULATED`.
+Eight complete, pre-aged stickers:
 
-## Damage
+- cassette
+- equalizer
+- fader bank
+- patch grid
+- speaker stack
+- turntable
+- vinyl record
+- waveform
 
-`damage/hardware_wear_overlay.png` is intentionally a full sparse overlay. It is best used at low opacity over a panel rather than cut into isolated stickers.
+They use distressed ink, faded colour, scuffed edges, and worn paper outlines. They are original generic music graphics, with no third-party logos or artist artwork.
 
-### Transparency note
+## Tape — `tape/`
 
-The generated images use a black working background rather than an alpha channel. In Photoshop, use **Select → Color Range** on the black background and create a layer mask before placing an element. For dark gaffer tape, use the outline/edge selection or a blend mode rather than selecting all black pixels.
+### Blank — `tape/blank/`
+
+- `masking_tape_wide.png`
+- `gaffer_tape_strip.png`
+- `foil_repair_patch.png`
+
+### Marked — `tape/marked/`
+
+- `fx_machine_marker_tape.png`
+- `modulated_marker_tape.png`
+
+The marked tape labels have the requested handwritten text. All tape assets include realistic creases, torn edges, and light age/wear.
+
+## Damage — `damage/`
+
+`hardware_wear_overlay.png` is a sparse, full-panel wear overlay. It is intentionally not split because its scratches, prints, and scuffs are designed to be composited together at low opacity.
+
+## Photoshop masking
+
+The generated working assets use a black background rather than an alpha channel. Use **Select → Color Range** on black to create a layer mask. For the dark gaffer tape, select its outer edge or use a suitable blend mode instead of removing all black pixels.
