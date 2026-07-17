@@ -205,11 +205,25 @@ def build_ui(root):
     # The live display is a custom Canvas renderer. It keeps the navigation
     # module readable while adding restrained TN scanlines, afterimages, and
     # small status backlights; all text remains dynamic application data.
+# The editable LCD bezel master is 1774 × 887 px (almost exactly 2:1).
+    # Keep that physical proportion in the running UI so texture integration
+    # later does not require stretching or redesigning the display contents.
+    SESSION_LCD_ASPECT = 1774 / 887
     nav_section = tk.Frame(top_area, bg=LCD_BORDER, padx=2, pady=2)
-    nav_section.pack(side="left", fill="both", expand=True)
-    session_lcd = tk.Canvas(nav_section, width=510, height=255,
+    nav_section.pack(side="left", fill="x", expand=True, anchor="n")
+    session_lcd = tk.Canvas(nav_section, width=510,
+                            height=round(510 / SESSION_LCD_ASPECT),
                             bg=LCD_BG, highlightthickness=0)
-    session_lcd.pack(fill="both", expand=True)
+    session_lcd.pack(fill="x")
+
+    def fit_session_lcd(event):
+        """Preserve the source bezel's 1774:887 aspect ratio on resize."""
+        width = max(320, event.width - 4)
+        height = round(width / SESSION_LCD_ASPECT)
+        if int(session_lcd.cget("height")) != height:
+            session_lcd.config(width=width, height=height)
+
+    nav_section.bind("<Configure>", fit_session_lcd)
 
     # Compatibility widgets retain the existing updater's label writes during
     # this first renderer migration. They are deliberately not packed; the
@@ -217,7 +231,6 @@ def build_ui(root):
     compat = tk.Frame(nav_section, bg=LCD_BG)
     def hidden_label():
         return tk.Label(compat, bg=LCD_BG)
-
     lbl_bookmark = hidden_label()
     lbl_bm_pos = hidden_label()
     lbl_group = hidden_label()
