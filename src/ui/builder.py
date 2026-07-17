@@ -201,114 +201,42 @@ def build_ui(root):
 
         eq_cells[band_idx] = (cell, canvas, name_lbl, value_lbl)
 
-    # ─────── RIGHT COLUMN: SESSION NAVIGATOR LCD ─────────────────────
-    # A recessed monochrome display makes session data read like a dedicated
-    # hardware module, while preserving every existing navigation readout.
+    # ─────── RIGHT COLUMN: TN / TERMINAL SESSION NAVIGATOR ───────────
+    # The live display is a custom Canvas renderer. It keeps the navigation
+    # module readable while adding restrained TN scanlines, afterimages, and
+    # small status backlights; all text remains dynamic application data.
     nav_section = tk.Frame(top_area, bg=LCD_BORDER, padx=2, pady=2)
     nav_section.pack(side="left", fill="both", expand=True)
-    nav_lcd = tk.Frame(nav_section, bg=LCD_BG, padx=9, pady=7)
-    nav_lcd.pack(fill="both", expand=True)
+    session_lcd = tk.Canvas(nav_section, width=510, height=255,
+                            bg=LCD_BG, highlightthickness=0)
+    session_lcd.pack(fill="both", expand=True)
 
-    nav_header = tk.Frame(nav_lcd, bg=LCD_BG)
-    nav_header.pack(fill="x", pady=(0, 5))
-    tk.Label(nav_header, text="SESSION NAVIGATOR", bg=LCD_BG, fg=LCD_TEXT,
-             font=("Consolas", 8, "bold"), anchor="w").pack(side="left")
-    tk.Label(nav_header, text="LIVE VIEW", bg=LCD_BG, fg=LCD_TEXT_DIM,
-             font=("Consolas", 7, "bold"), anchor="e").pack(side="right")
-    tk.Frame(nav_lcd, bg=LCD_BORDER, height=1).pack(fill="x", pady=(0, 5))
+    # Compatibility widgets retain the existing updater's label writes during
+    # this first renderer migration. They are deliberately not packed; the
+    # Canvas above is the only visible Navigator implementation.
+    compat = tk.Frame(nav_section, bg=LCD_BG)
+    def hidden_label():
+        return tk.Label(compat, bg=LCD_BG)
 
-    def lcd_row(parent, label, value, alternate=False):
-        bg = LCD_BG_ALT if alternate else LCD_BG
-        row = tk.Frame(parent, bg=bg, padx=5, pady=4)
-        row.pack(fill="x", pady=1)
-        tk.Label(row, text=label, bg=bg, fg=LCD_TEXT_DIM,
-                 font=("Consolas", 7, "bold"), width=8, anchor="w").pack(side="left")
-        value_lbl = tk.Label(row, text=value, bg=bg, fg=LCD_TEXT,
-                             font=("Consolas", 9, "bold"), anchor="w")
-        value_lbl.pack(side="left", fill="x", expand=True)
-        return row, value_lbl
-
-    # Bookmark + group retain their position counters at the right edge.
-    brow = tk.Frame(nav_lcd, bg=LCD_BG_ALT, padx=5, pady=4)
-    brow.pack(fill="x", pady=1)
-    tk.Label(brow, text="BMARK", bg=LCD_BG_ALT, fg=LCD_TEXT_DIM,
-             font=("Consolas", 7, "bold"), width=8, anchor="w").pack(side="left")
-    lbl_bookmark = tk.Label(brow, text="—", bg=LCD_BG_ALT, fg=LCD_ACCENT,
-                            font=("Consolas", 9, "bold"), anchor="w")
-    lbl_bookmark.pack(side="left", fill="x", expand=True)
-    lbl_bm_pos = tk.Label(brow, text="", bg=LCD_BG_ALT, fg=LCD_TEXT_DIM,
-                          font=("Consolas", 8, "bold"))
-    lbl_bm_pos.pack(side="right")
-
-    grow2 = tk.Frame(nav_lcd, bg=LCD_BG, padx=5, pady=4)
-    grow2.pack(fill="x", pady=1)
-    tk.Label(grow2, text="GROUP", bg=LCD_BG, fg=LCD_TEXT_DIM,
-             font=("Consolas", 7, "bold"), width=8, anchor="w").pack(side="left")
-    lbl_group = tk.Label(grow2, text="—", bg=LCD_BG, fg=LCD_TEXT,
-                         font=("Consolas", 9, "bold"), anchor="w")
-    lbl_group.pack(side="left", fill="x", expand=True)
-    lbl_group_pos = tk.Label(grow2, text="", bg=LCD_BG, fg=LCD_TEXT_DIM,
-                             font=("Consolas", 8, "bold"))
-    lbl_group_pos.pack(side="right")
-
-    tk.Frame(nav_lcd, bg=LCD_BORDER, height=1).pack(fill="x", pady=5)
-    track_block, lbl_track_name = lcd_row(nav_lcd, "TRACK", "—", alternate=True)
-    _, lbl_scene_name = lcd_row(nav_lcd, "SCENE", "—")
-    _, lbl_clip_name = lcd_row(nav_lcd, "CLIP", "—", alternate=True)
-
-    # Numeric positions are retained as dedicated LCD counters.
-    grid = tk.Frame(nav_lcd, bg=LCD_BG)
-    grid.pack(fill="x", pady=(6, 2))
-    def pos_col(parent, label, col, color=LCD_TEXT):
-        f = tk.Frame(parent, bg=LCD_BG_ALT, padx=6, pady=4,
-                     highlightbackground=LCD_BORDER, highlightthickness=1)
-        f.grid(row=0, column=col, padx=2, sticky="ew")
-        parent.columnconfigure(col, weight=1)
-        tk.Label(f, text=label, bg=LCD_BG_ALT, fg=LCD_TEXT_DIM,
-                 font=("Consolas", 6, "bold")).pack()
-        val = tk.Label(f, text="1", bg=LCD_BG_ALT, fg=color,
-                       font=("Consolas", 12, "bold"))
-        val.pack()
-        return val
-
-    lbl_scene_num = pos_col(grid, "SCENE", 0)
-    lbl_track_num = pos_col(grid, "TRACK", 1)
-    lbl_bm_num = pos_col(grid, "BMARK", 2, LCD_ACCENT)
-
-    vrow = tk.Frame(nav_lcd, bg=LCD_BG, pady=5)
-    vrow.pack(fill="x")
-    lbl_volume = tk.Label(vrow, text="+0.0 dB", bg=LCD_BG, fg=LCD_TEXT,
-                          font=("Consolas", 11, "bold"), anchor="w")
-    lbl_volume.pack(side="left")
-    lbl_vol_mode = tk.Label(vrow, text="SELECT+R-stick", bg=LCD_BG,
-                            fg=LCD_TEXT_DIM, font=("Consolas", 7, "bold"), anchor="e")
-    lbl_vol_mode.pack(side="right")
-
-    btn_stop = tk.Button(nav_lcd, text="■ STOP TRACK  (L2)",
-                         bg=LCD_BG_ALT, fg=ABL_RED, font=("Consolas", 8, "bold"),
-                         activebackground="#3a0000", activeforeground=ABL_RED,
-                         relief="flat", bd=0, pady=5, cursor="hand2",
-                         command=action_stop_track)
-    btn_stop.pack(fill="x", pady=(3, 4))
-
-    mrow = tk.Frame(nav_lcd, bg=LCD_BG)
-    mrow.pack(fill="x", pady=(0, 3))
-    def pill(parent, text):
-        lbl = tk.Label(parent, text=text, bg=ABL_PANEL, fg=ABL_TEXT_FAINT,
-                       font=("Consolas", 7, "bold"), padx=5, pady=3)
-        lbl.pack(side="left", padx=(0, 2))
-        return lbl
-
-    lbl_r2 = pill(mrow, "R2 SAFE")
-    lbl_select = pill(mrow, "SEL")
-    lbl_start = pill(mrow, "PLAY")
-    lbl_l1 = pill(mrow, "L1 FX")
-    lbl_eq_pill = pill(mrow, "◇ EQ")
-
-    lbl_eq_status = tk.Label(nav_lcd, text="EQ inactive (R3 to toggle)",
-                             bg=LCD_BG, fg=LCD_TEXT_DIM,
-                             font=("Consolas", 7, "bold"), anchor="w")
-    lbl_eq_status.pack(fill="x", pady=(2, 0))
+    lbl_bookmark = hidden_label()
+    lbl_bm_pos = hidden_label()
+    lbl_group = hidden_label()
+    lbl_group_pos = hidden_label()
+    track_block = compat
+    lbl_track_name = hidden_label()
+    lbl_scene_name = hidden_label()
+    lbl_clip_name = hidden_label()
+    lbl_scene_num = hidden_label()
+    lbl_track_num = hidden_label()
+    lbl_bm_num = hidden_label()
+    lbl_volume = hidden_label()
+    lbl_vol_mode = hidden_label()
+    lbl_r2 = hidden_label()
+    lbl_select = hidden_label()
+    lbl_start = hidden_label()
+    lbl_l1 = hidden_label()
+    lbl_eq_pill = hidden_label()
+    lbl_eq_status = hidden_label()
 
     hline(root, pady=6)
 
@@ -466,4 +394,5 @@ def build_ui(root):
         "eq_status":        lbl_eq_status,
         "notification":     lbl_notification,
         "eq_channel_meter": eq_channel_meter,
+        "session_lcd":      session_lcd,
     }

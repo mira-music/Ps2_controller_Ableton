@@ -61,6 +61,7 @@ from src.ui.widgets import (
     compute_clip_state, should_clip_flicker,
     compute_trim_visual_position,
 )
+from src.ui.lcd_renderer import draw_session_lcd
 from src.log_setup import get_logger
 
 log = get_logger(__name__)
@@ -563,6 +564,60 @@ def update_ui(root, lbl):
                 display_name = "💥 " + name
             set_label(name_lbl,  f"fx_name_{slot}", display_name, fg=ABL_TEXT_DIM)
             set_label(value_lbl, f"fx_value_{slot}", value_string, fg=accent)
+
+    # ── SESSION NAVIGATOR: TN LCD / TERMINAL RENDERER ───────────────────
+    # The renderer receives only this UI snapshot. It has no shared-state or
+    # OSC dependency, so the display treatment cannot affect control latency.
+    if bmarks:
+        lcd_bookmark = bmarks[cursor_bmark]["name"]
+        lcd_bookmark_pos = f"{cursor_bmark + 1:02}/{len(bmarks):02}"
+        lcd_bookmark_number = f"{cursor_bmark + 1:02}"
+    else:
+        lcd_bookmark = "NO §-SCENES"
+        lcd_bookmark_pos = "--/--"
+        lcd_bookmark_number = "--"
+
+    if groups:
+        lcd_group = groups[cursor_group]["name"]
+        lcd_group_pos = f"{cursor_group + 1:02}/{len(groups):02}"
+    else:
+        lcd_group = "NO *-TRACKS"
+        lcd_group_pos = "--/--"
+
+    if clip == "…":
+        lcd_clip = "…"
+    elif abl["clip_empty"]:
+        lcd_clip = "— empty —"
+    else:
+        lcd_clip = clip
+
+    if eq_mode_active and 0 <= eq_selected_band < len(EQ_MACRO_NAMES_EXPECTED):
+        lcd_mode = f"EQ: {EQ_MACRO_NAMES_EXPECTED[eq_selected_band].replace('EQ ', '').upper()}"
+    elif l1_held:
+        lcd_mode = "FX: ACTIVE"
+    else:
+        lcd_mode = "EQ: OFF"
+
+    draw_session_lcd(lbl["session_lcd"], {
+        "bookmark": lcd_bookmark,
+        "bookmark_pos": lcd_bookmark_pos,
+        "group": lcd_group,
+        "group_pos": lcd_group_pos,
+        "track": abl["track_name"],
+        "scene": abl["scene_name"],
+        "clip": lcd_clip,
+        "scene_number": f"{current_scene + 1:02}",
+        "track_number": f"{current_track + 1:02}",
+        "bookmark_number": lcd_bookmark_number,
+        "volume": db_from_vol(vol),
+        "volume_colour": vc,
+        "mode": lcd_mode,
+        "eq_active": eq_mode_active,
+        "osc_online": fx_ready or eq_ready,
+        "controller_online": ctrl_conn,
+        "clip_active": clip_active,
+        "status": s["last_action"],
+    })
 
     # ── RESCHEDULE ──────────────────────────────────────────────────────
     # Check shutdown flag before re-scheduling. Without this, after the user
