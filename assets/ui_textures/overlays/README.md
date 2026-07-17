@@ -4,10 +4,10 @@ These original, watermark-free overlay sheets are working material for the physi
 
 | File | Contents | Suggested use |
 |---|---|---|
-| `peeled_label_shapes.png` | Blank torn paper labels, strips, corners, fragments | Add editable label areas or paper remnants to a panel. |
-| `music_stickers_sheet.png` | Original distressed music-culture graphics | Add selective personality to empty areas; use sparingly. |
-| `tape_and_repair_sheet.png` | Masking tape, gaffer tape, foil patches, folded tape | Add believable repair/history details. |
-| `damage_and_wear_sheet.png` | Scratches, scuffs, fingerprint marks, chipped corners, knob-wear arcs | Apply as low-opacity material wear. |
+| `contact_sheets/peeled_label_shapes.png` | Blank torn paper labels, strips, corners, fragments | Add editable label areas or paper remnants to a panel. |
+| `contact_sheets/music_stickers_sheet.png` | Original distressed music-culture graphics | Add selective personality to empty areas; use sparingly. |
+| `contact_sheets/tape_and_repair_sheet.png` | Masking tape, gaffer tape, foil patches, folded tape | Add believable repair/history details. |
+| `contact_sheets/damage_and_wear_sheet.png` | Scratches, scuffs, fingerprint marks, chipped corners, knob-wear arcs | Apply as low-opacity material wear. |
 
 ## Photoshop workflow
 
