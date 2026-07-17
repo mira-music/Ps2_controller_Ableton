@@ -40,6 +40,15 @@ ABL_GREEN       = "#65d96a"
 ABL_RED         = "#ff3b30"
 ABL_PURPLE      = "#b878dc"
 
+# Navigation display — a recessed monochrome LCD module, deliberately
+# separate from the faceplate so session data reads as an instrument display.
+LCD_BG          = "#101615"
+LCD_BG_ALT      = "#151d1b"
+LCD_BORDER      = "#34433d"
+LCD_TEXT        = "#b9d7a8"
+LCD_TEXT_DIM    = "#71866d"
+LCD_ACCENT      = "#d4bd66"
+
 BLINK_BG_BRIGHT = "#ff3b30"
 BLINK_BG_DIM    = "#3a1818"
 
