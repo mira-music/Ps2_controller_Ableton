@@ -44,6 +44,13 @@ class HardwarePreview:
 
     def __init__(self, root: tk.Tk):
         self.root = root
+        # The design itself stays a 760×900 logical canvas. On a small laptop
+        # the preview chooses a 75% display-only fit mode; source skin files
+        # are never stretched or resized at runtime.
+        self.scale = 0.75 if root.winfo_screenheight() < 900 else 1.0
+        self.ui_w = round(W * self.scale)
+        self.ui_h = round(H * self.scale)
+        self.compact = self.scale < 1.0
         self.playing = True
         self.fx_active = False
         self.clip = False
@@ -55,9 +62,9 @@ class HardwarePreview:
         root.title("FX Machine — Hardware Skin Preview (standalone)")
         root.configure(bg=FACE)
         root.resizable(False, False)
-        root.geometry(f"{W}x{H}")
+        root.geometry(f"{self.ui_w}x{self.ui_h}")
 
-        self.canvas = tk.Canvas(root, width=W, height=H, bg=FACE,
+        self.canvas = tk.Canvas(root, width=self.ui_w, height=self.ui_h, bg=FACE,
                                 highlightthickness=0)
         self.canvas.pack()
         self._load_images()
@@ -65,25 +72,29 @@ class HardwarePreview:
         self._draw_static()
         self._tick()
 
-    def _load_hd(self, filename: str) -> tk.PhotoImage:
+    def _load_2x(self, filename: str) -> tk.PhotoImage:
         path = SKIN / filename
         if not path.is_file():
             raise FileNotFoundError(f"Missing preview skin asset: {path}")
-        # Every source image in hd_default is exactly 2× its logical size.
         return tk.PhotoImage(file=path).subsample(2, 2)
+
+    def _load_frame_set(self, size: str, kind: str) -> list[tk.PhotoImage]:
+        folder = SKIN / "knob_frames" / size / kind
+        return [self._load_2x(str(Path("knob_frames") / size / kind / f"{index:02d}.png"))
+                for index in range(12)]
 
     def _load_images(self) -> None:
         try:
-            self.images = {
-                "faceplate": self._load_hd("faceplate_1520x1800.png"),
-                "eq_panel": self._load_hd("eq_channel_400x1000.png"),
-                "lcd_bezel": self._load_hd("session_lcd_bezel_1000x500.png"),
-                "fx_panel": self._load_hd("fx_module_1440x480.png"),
-                "eq_knob": self._load_hd("eq_knob_164x164.png"),
-                "fx_knob": self._load_hd("fx_knob_112x112.png"),
-            }
+            master = "hardware_master_1140x1350.png" if self.compact else "hardware_master_1520x1800.png"
+            frame_size = "compact" if self.compact else "full"
+            self.images = {"hardware": self._load_2x(master)}
+            self.eq_frames = self._load_frame_set(frame_size, "eq")
+            self.fx_frames = self._load_frame_set(frame_size, "fx")
         except (tk.TclError, FileNotFoundError) as exc:
             raise SystemExit(f"Cannot load the standalone UI skin:\n{exc}") from exc
+
+    def _point(self, x: float, y: float) -> tuple[int, int]:
+        return round(x * self.scale), round(y * self.scale)
 
     def _bind_keys(self) -> None:
         self.root.bind("<space>", lambda _event: self._toggle("play"))
@@ -105,14 +116,10 @@ class HardwarePreview:
 
     def _draw_static(self) -> None:
         c = self.canvas
-        c.create_image(0, 0, anchor="nw", image=self.images["faceplate"], tags="base")
+        c.create_image(0, 0, anchor="nw", image=self.images["hardware"], tags="hardware")
 
-        # Physical module placements use the 760×900 logical design grid.
-        c.create_image(12, 104, anchor="nw", image=self.images["eq_panel"], tags="base")
-        c.create_image(242, 104, anchor="nw", image=self.images["lcd_bezel"], tags="base")
-        c.create_image(20, 642, anchor="nw", image=self.images["fx_panel"], tags="base")
-
-        # Faceplate labels are static material labels; real values remain dynamic.
+        # Faceplate labels are screen-printed material labels. Knob caps rotate
+        # as complete sprites in _draw_dynamic(), rather than using a fake line.
         c.create_text(16, 22, text="FX MACHINE", anchor="w", fill="#e4ded2",
                       font=("Segoe UI", 11, "bold"), tags="base")
         c.create_text(744, 22, text="SKIN PREVIEW", anchor="e", fill="#7d877e",
@@ -124,15 +131,21 @@ class HardwarePreview:
                       font=("Consolas", 7, "bold"), tags="base")
         c.create_text(25, 890, text="STANDALONE VISUAL TEST  •  NO ABLETON / OSC / CONTROLLER REQUIRED",
                       anchor="w", fill="#7c8880", font=("Consolas", 7, "bold"), tags="base")
+        if self.compact:
+            c.scale("base", 0, 0, self.scale, self.scale)
 
-        # Physical knob caps placed exactly over their panel wells.
-        self.eq_positions = [(150, 180), (150, 300), (150, 420), (150, 540)]
+        # These are logical 760×900 positions; _point applies preview-only fit.
+        self.eq_positions = [(150, 208), (150, 329), (150, 450), (150, 570)]
         self.fx_positions = [(130, 706), (290, 706), (455, 706), (625, 706),
                              (130, 814), (290, 814), (455, 814), (625, 814)]
+        self.eq_knob_items = []
+        self.fx_knob_items = []
         for x, y in self.eq_positions:
-            c.create_image(x, y, anchor="center", image=self.images["eq_knob"], tags="knobcap")
+            px, py = self._point(x, y)
+            self.eq_knob_items.append(c.create_image(px, py, anchor="center", image=self.eq_frames[0], tags="knobcap"))
         for x, y in self.fx_positions:
-            c.create_image(x, y, anchor="center", image=self.images["fx_knob"], tags="knobcap")
+            px, py = self._point(x, y)
+            self.fx_knob_items.append(c.create_image(px, py, anchor="center", image=self.fx_frames[0], tags="knobcap"))
 
     def _lcd_text(self, x: int, y: int, text: str, fill: str = LCD_TEXT,
                   size: int = 8, anchor: str = "w") -> None:
@@ -149,8 +162,8 @@ class HardwarePreview:
     def _draw_meter(self, level: float) -> None:
         c = self.canvas
         # Align with the left well in the EQ texture.
-        x1, x2, bottom = 53, 62, 594
-        segments, height, gap = 22, 10, 3
+        x1, x2, bottom = 53, 62, 570
+        segments, height, gap = 22, 12, 4
         lit = int(level * segments)
         for index in range(segments):
             y2 = bottom - index * (height + gap)
@@ -163,11 +176,11 @@ class HardwarePreview:
                 on, off = "#cf4e42", "#3a1514"
             c.create_rectangle(x1, y1, x2, y2, fill=on if index < lit else off,
                                outline="", tags="dynamic")
-        c.create_rectangle(39, 136, 77, 147,
+        c.create_rectangle(39, 170, 77, 181,
                            fill="#72231f" if self.clip else "#1d1010",
                            outline="#9f4238" if self.clip else "#42201d",
                            tags="dynamic")
-        c.create_text(58, 142, text="CLIP", fill="#fff0e6" if self.clip else "#75413d",
+        c.create_text(58, 176, text="CLIP", fill="#fff0e6" if self.clip else "#75413d",
                       font=("Consolas", 6, "bold"), tags="dynamic")
 
     def _draw_lcd(self) -> None:
@@ -230,7 +243,10 @@ class HardwarePreview:
         for index, ((x, y), label) in enumerate(zip(self.eq_positions, bands)):
             selected = index == self.eq_band
             value = 0.50 + 0.16 * math.sin(elapsed * 0.45 + index)
-            self._indicator(x, y, value, LCD_AMBER if selected else "#ded8c9", 31)
+            frame = min(11, max(0, round(value * 11)))
+            c.itemconfig(self.eq_knob_items[index], image=self.eq_frames[frame])
+            if selected:
+                c.create_oval(x - 43, y - 43, x + 43, y + 43, outline=LCD_AMBER, width=2, tags="dynamic")
             c.create_text(x, y - 51, text=label, fill=LCD_AMBER if selected else "#d9d5ca",
                           font=("Consolas", 8, "bold"), tags="dynamic")
             c.create_text(x, y + 51, text=("+0.0 dB" if index else "-0.2 dB"),
@@ -240,7 +256,8 @@ class HardwarePreview:
         for index, ((x, y), name) in enumerate(zip(self.fx_positions, fx_names)):
             value = 0.15 + 0.7 * ((math.sin(elapsed * 0.4 + index) + 1) / 2)
             accent = LCD_AMBER if index < 4 else "#5e9fc8"
-            self._indicator(x, y, value, accent, 20)
+            frame = min(11, max(0, round(value * 11)))
+            c.itemconfig(self.fx_knob_items[index], image=self.fx_frames[frame])
             c.create_text(x, y + 35, text=name, fill="#c4c8bd", font=("Consolas", 6, "bold"), tags="dynamic")
             c.create_text(x, y + 48, text=f"{int(value * 127):03}", fill=accent,
                           font=("Consolas", 7, "bold"), tags="dynamic")
@@ -253,6 +270,10 @@ class HardwarePreview:
                       font=("Consolas", 7, "bold"), tags="dynamic")
         c.create_text(25, 872, text="● VISUAL SYSTEM ONLINE", anchor="w", fill=LCD_GREEN,
                       font=("Consolas", 7, "bold"), tags="dynamic")
+        if self.compact:
+            # Canvas coordinates scale, while compact sprite frames remain
+            # pixel-sharp pre-rendered assets.
+            c.scale("dynamic", 0, 0, self.scale, self.scale)
 
     def _tick(self) -> None:
         if self.root.winfo_exists():
