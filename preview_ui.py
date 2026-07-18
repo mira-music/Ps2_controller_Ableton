@@ -162,7 +162,7 @@ class HardwarePreview:
     def _draw_meter(self, level: float) -> None:
         c = self.canvas
         # Align with the left well in the EQ texture.
-        x1, x2, bottom = 53, 62, 570
+        x1, x2, bottom = 53, 62, 552
         segments, height, gap = 22, 12, 4
         lit = int(level * segments)
         for index in range(segments):
