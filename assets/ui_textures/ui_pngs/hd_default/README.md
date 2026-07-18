@@ -1,16 +1,19 @@
-# HD default skin assets
+# Fixed HD default skin
 
-These are the first runnable **2× skin assets** for the fixed 760 × 900 logical UI canvas. They must remain pixel-exact:
+The only runtime physical holder is:
 
-| Asset | HD source pixels | Logical display size |
-|---|---:|---:|
-| `faceplate_1520x1800.png` | 1520 × 1800 | 760 × 900 |
-| `eq_channel_400x1000.png` | 400 × 1000 | 200 × 500 |
-| `session_lcd_bezel_1000x500.png` | 1000 × 500 | 500 × 250 |
-| `fx_module_1440x480.png` | 1440 × 480 | 720 × 240 |
-| `eq_knob_164x164.png` | 164 × 164 | 82 × 82 |
-| `fx_knob_112x112.png` | 112 × 112 | 56 × 56 |
+- `../panel_masters/faceplate_master.png` — **1520 × 1800**, the full 2× faceplate master.
+- `faceplate_master_1140x1350.png` — a 75% compact preview derivative for screens below 900 px tall.
 
-The application will downsample these by exactly 2:1 with Tkinter. That preserves sharp edges without arbitrary runtime image scaling.
+The preview downsamples the full holder by exactly 2:1 at the normal 760 × 900 logical canvas. The compact file downsamples to a 570 × 675 laptop-friendly preview.
 
-The outer faceplate, panel recesses, bezel, and knob cap are visual materials only. Dynamic values, knob indicators, meter segments, LCD text, and safety/connection states remain code-rendered above them.
+## Editable physical modules
+
+The holder is assembled from exact-size panel modules in `../placeable_panels/`:
+
+- EQ module: 360 × 1320 at x=40, y=200
+- LCD screen module: 1000 × 500 at x=470, y=180
+- FX module: 1000 × 650 at x=470, y=760
+- Status module: 1440 × 160 at x=40, y=1570
+
+Knob animation uses the pre-rendered 12-position sprite sets in `knob_frames/`. The original generic panels and unused single-cap source images were intentionally removed to keep the skin unambiguous.

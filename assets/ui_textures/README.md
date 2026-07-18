@@ -6,10 +6,10 @@ These are the first visual-source assets for the hardware UI redesign. They are 
 
 | File | Native size | Intended use |
 |---|---:|---|
-| `ui_pngs/panel_masters/faceplate_master.png` | 1122 × 1402 | Overall hardware-front-panel composition and material reference. |
-| `ui_pngs/panel_masters/eq_channel_strip_master.png` | 793 × 1983 | EQ channel: left meter bay, top clip lens, and one vertical TRIM/HIGH/MID/LOW knob column. |
-| `ui_pngs/panel_masters/session_lcd_bezel_master.png` | 1774 × 887 | Recessed Session Navigator LCD bezel and screen texture. |
-| `ui_pngs/panel_masters/fx_module_master.png` | 1536 × 1024 | Eight-control FX module, arranged as a 4 × 2 knob matrix. |
+| `ui_pngs/panel_masters/faceplate_master.png (1520 × 1800 assembled holder)` | 1122 × 1402 | Overall hardware-front-panel composition and material reference. |
+| `ui_pngs/placeable_panels/ (see README.md)` | 793 × 1983 | EQ channel: left meter bay, top clip lens, and one vertical TRIM/HIGH/MID/LOW knob column. |
+| `ui_pngs/placeable_panels/ (see README.md)` | 1774 × 887 | Recessed Session Navigator LCD bezel and screen texture. |
+| `ui_pngs/placeable_panels/ (see README.md)` | 1536 × 1024 | Eight-control FX module, arranged as a 4 × 2 knob matrix. |
 
 ## Editing contract
 
