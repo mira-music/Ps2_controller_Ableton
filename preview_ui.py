@@ -127,7 +127,7 @@ class HardwarePreview:
         c.create_line(12, 42, 748, 42, fill="#3e5146", width=2, tags="base")
         c.create_text(20, 91, text="INPUT / EQ", anchor="w", fill="#a6b19f",
                       font=("Consolas", 7, "bold"), tags="base")
-        c.create_text(245, 405, text="FX ENGINE", anchor="w", fill="#a6b19f",
+        c.create_text(285, 418, text="FX ENGINE", anchor="w", fill="#a6b19f",
                       font=("Consolas", 7, "bold"), tags="base")
         c.create_text(25, 890, text="STANDALONE VISUAL TEST  •  NO ABLETON / OSC / CONTROLLER REQUIRED",
                       anchor="w", fill="#7c8880", font=("Consolas", 7, "bold"), tags="base")
@@ -135,9 +135,9 @@ class HardwarePreview:
             c.scale("base", 0, 0, self.scale, self.scale)
 
         # These are logical 760×900 positions; _point applies preview-only fit.
-        self.eq_positions = [(140, 200), (140, 332), (140, 465), (140, 597)]
-        self.fx_positions = [(310, 481), (427, 481), (544, 481), (658, 481),
-                             (310, 596), (427, 596), (544, 596), (658, 596)]
+        self.eq_positions = [(178, 210), (178, 323), (178, 444), (178, 566)]
+        self.fx_positions = [(355, 502), (460, 502), (565, 502), (670, 502),
+                             (355, 605), (460, 605), (565, 605), (670, 605)]
         self.eq_knob_items = []
         self.fx_knob_items = []
         for x, y in self.eq_positions:
@@ -162,7 +162,7 @@ class HardwarePreview:
     def _draw_meter(self, level: float) -> None:
         c = self.canvas
         # Align with the left well in the EQ texture.
-        x1, x2, bottom = 72, 83, 650
+        x1, x2, bottom = 52, 63, 626
         segments, height, gap = 22, 14, 8
         lit = int(level * segments)
         for index in range(segments):
@@ -176,17 +176,17 @@ class HardwarePreview:
                 on, off = "#cf4e42", "#3a1514"
             c.create_rectangle(x1, y1, x2, y2, fill=on if index < lit else off,
                                outline="", tags="dynamic")
-        c.create_rectangle(53, 128, 91, 139,
+        c.create_rectangle(34, 134, 72, 145,
                            fill="#72231f" if self.clip else "#1d1010",
                            outline="#9f4238" if self.clip else "#42201d",
                            tags="dynamic")
-        c.create_text(72, 134, text="CLIP", fill="#fff0e6" if self.clip else "#75413d",
+        c.create_text(53, 140, text="CLIP", fill="#fff0e6" if self.clip else "#75413d",
                       font=("Consolas", 6, "bold"), tags="dynamic")
 
     def _draw_lcd(self) -> None:
         c = self.canvas
         # These coordinates map to the INNER screen area of the 500×250 bezel.
-        x0, y0, x1, y1 = 284, 143, 696, 313
+        x0, y0, x1, y1 = 305, 135, 710, 305
         # The bezel already supplies its material screen texture. Draw only
         # subtle TN scanlines and terminal data above it.
         for y in range(y0 + 2, y1, 4):
@@ -263,12 +263,12 @@ class HardwarePreview:
                           font=("Consolas", 7, "bold"), tags="dynamic")
 
         self._draw_lcd()
-        c.create_text(32, 770, text="EQ MODE: " + bands[self.eq_band], anchor="w",
+        c.create_text(32, 775, text="EQ MODE: " + bands[self.eq_band], anchor="w",
                       fill=LCD_AMBER, font=("Consolas", 7, "bold"), tags="dynamic")
-        c.create_text(720, 770, text="FX: " + ("ACTIVE" if self.fx_active else "READY"), anchor="e",
+        c.create_text(720, 775, text="FX: " + ("ACTIVE" if self.fx_active else "READY"), anchor="e",
                       fill=LCD_AMBER if self.fx_active else LCD_DIM,
                       font=("Consolas", 7, "bold"), tags="dynamic")
-        c.create_text(45, 825, text="● VISUAL SYSTEM ONLINE", anchor="w", fill=LCD_GREEN,
+        c.create_text(45, 815, text="● VISUAL SYSTEM ONLINE", anchor="w", fill=LCD_GREEN,
                       font=("Consolas", 7, "bold"), tags="dynamic")
         if self.compact:
             # Canvas coordinates scale, while compact sprite frames remain

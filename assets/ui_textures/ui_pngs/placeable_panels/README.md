@@ -1,12 +1,12 @@
-# Placeable panel contract
+# Placeable panel contract — redesigned
 
-These PNGs are the editable modules used to assemble `../panel_masters/faceplate_master.png`.
+These are the only physical modules assembled into `../panel_masters/faceplate_master.png`. They are designed at their native aspect ratios; no runtime panel is stretched.
 
-| Module | Pixel size | Position inside the 1520 × 1800 master |
+| Module | Pixel size | Master position |
 |---|---:|---:|
-| `eq_module_360x1320.png` | 360 × 1320 | x=40, y=200 |
-| `screen_module_1000x500.png` | 1000 × 500 | x=470, y=180 |
-| `fx_module_1000x650.png` | 1000 × 650 | x=470, y=760 |
-| `status_module_1440x160.png` | 1440 × 160 | x=40, y=1570 |
+| `eq_module_480x1210.png` | 480 × 1210 | x=40, y=220 |
+| `screen_module_980x490.png` | 980 × 490 | x=520, y=180 |
+| `fx_module_920x600.png` | 920 × 600 | x=560, y=800 |
+| `status_module_1440x180.png` | 1440 × 180 | x=40, y=1550 |
 
-Do not change these dimensions. You can freely edit their material, wear, stickers, labels, and screws while preserving the blank physical wells and LCD opening. The preview maps all dynamic controls to this contract.
+The full faceplate is 1520 × 1800. Keep all module dimensions unchanged when editing in Photoshop. Dynamic knobs, meter, LCD text, and status LEDs are mapped to the physical wells inside these panels.
