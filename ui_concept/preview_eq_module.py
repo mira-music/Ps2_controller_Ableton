@@ -37,8 +37,8 @@ class EqChannelConcept:
     PANEL = (60, 30, 300, 635)
     METER_X = 118
     KNOB_X = 217
-    KNOB_YS = (128, 268, 406, 539)
-    SOCKET_R = 43
+    KNOB_YS = (127, 265, 402, 539)
+    SOCKET_R = 50
     KNOB_R = 36
 
     BANDS = ("TRIM", "HIGH", "MID", "LOW")
@@ -119,8 +119,8 @@ class EqChannelConcept:
     def _draw_meter(self, level: float) -> None:
         """Draw individual recessed LED lenses, not a flat colour ladder."""
         c = self.canvas
-        segments, seg_h, gap = 22, 14, 7
-        bottom = 585
+        segments, seg_h, gap = 22, 15, 8
+        bottom = 596
         lit = round(level * segments)
         for index in range(segments):
             y2 = bottom - index * (seg_h + gap)
