@@ -7,8 +7,8 @@ existing app, its textures, Ableton, OSC, pygame, or controller code.
 
 from __future__ import annotations
 
-import math
 import time
+from pathlib import Path
 import tkinter as tk
 
 W, H = 390, 700
@@ -49,6 +49,8 @@ class EqChannelConcept:
         self.clip = False
         self.signal_active = True
         self.started = time.perf_counter()
+        self.assets = Path(__file__).resolve().parent / "assets" / "eq_final"
+        self._load_skin()
 
         root.title("FX Machine — EQ Channel Concept (standalone)")
         root.configure(bg=FACE)
@@ -65,40 +67,36 @@ class EqChannelConcept:
         self._draw_static()
         self._tick()
 
+    def _load_skin(self) -> None:
+        """Load the approved 2× panel texture and whole-knob rotation frames."""
+        try:
+            self.panel_image = tk.PhotoImage(file=self.assets / "eq_channel_panel_680x1280.png").subsample(2, 2)
+            self.knob_frames = [
+                tk.PhotoImage(file=self.assets / "knob_frames" / f"{index:02d}.png").subsample(2, 2)
+                for index in range(12)
+            ]
+        except tk.TclError as exc:
+            raise SystemExit(f"Could not load EQ concept skin: {exc}") from exc
+
     def _draw_static(self) -> None:
         c = self.canvas
         x1, y1, x2, y2 = self.PANEL
 
-        # Outer module: dark powder-coated panel, inset rim, and a concise title.
-        c.create_rectangle(x1, y1, x2, y2, fill=PANEL, outline=EDGE_DARK, width=3)
-        c.create_line(x1 + 2, y1 + 2, x2 - 2, y1 + 2, fill=EDGE_LIGHT)
-        c.create_line(x1 + 2, y1 + 2, x1 + 2, y2 - 2, fill=EDGE_LIGHT)
+        # Approved final panel texture: exactly 340 × 640 logical pixels.
+        c.create_image(x1, y1, anchor="nw", image=self.panel_image)
         c.create_text(x1 + 16, y1 + 17, text="INPUT / EQ", anchor="w",
                       fill=TEXT, font=("Consolas", 9, "bold"))
         c.create_text(x2 - 16, y1 + 17, text="CH 01", anchor="e",
                       fill=TEXT_DIM, font=("Consolas", 8, "bold"))
-        c.create_line(x1 + 14, y1 + 32, x2 - 14, y1 + 32, fill=EDGE_DARK)
-
-        # Meter recess and physical CLIP lens. The dynamic meter begins below
-        # this lens and ends within the dedicated slot.
-        c.create_rectangle(42, 113, 90, 620, fill=PANEL_INSET,
-                           outline=EDGE_DARK, width=2)
-        c.create_rectangle(46, 69, 86, 91, fill="#240e0c", outline="#6c302a")
         c.create_text(66, 80, text="CLIP", fill="#81504a",
                       font=("Consolas", 7, "bold"))
         c.create_text(66, 102, text="OUT", fill=TEXT_DIM,
                       font=("Consolas", 7, "bold"))
 
-        # Four physical knob sockets. Label/value fields are separated from
-        # the tick rings so they cannot collide with a large knob cap.
+        self.knob_items = []
         for index, y in enumerate(self.KNOB_YS):
-            c.create_oval(self.KNOB_X - self.SOCKET_R, y - self.SOCKET_R,
-                          self.KNOB_X + self.SOCKET_R, y + self.SOCKET_R,
-                          fill=PANEL_INSET, outline=EDGE_DARK, width=2)
-            c.create_oval(self.KNOB_X - self.SOCKET_R + 4, y - self.SOCKET_R + 4,
-                          self.KNOB_X + self.SOCKET_R - 4, y + self.SOCKET_R - 4,
-                          outline=EDGE_LIGHT)
-            self._draw_ticks(y)
+            self.knob_items.append(c.create_image(self.KNOB_X, y, anchor="center",
+                                                   image=self.knob_frames[0]))
             c.create_text(self.KNOB_X, y - 68, text=self.BANDS[index],
                           fill=TEXT, font=("Consolas", 9, "bold"))
             c.create_text(self.KNOB_X, y + 68, text=self.VALUES[index],
@@ -108,48 +106,14 @@ class EqChannelConcept:
         c.create_text(x1 + 16, 650, text="E SELECT   C CLIP   SPACE SIGNAL",
                       anchor="w", fill=TEXT_DIM, font=("Consolas", 7, "bold"))
 
-    def _draw_ticks(self, y: int) -> None:
+    def _draw_knob(self, index: int, y: int, value: float, selected: bool) -> None:
         c = self.canvas
-        for step in range(13):
-            # 270-degree DJ-style scale, with a stronger unity top marker.
-            angle = math.radians(225 - step * 270 / 12)
-            outer = self.SOCKET_R - 4
-            length = 10 if step in (0, 6, 12) else 5
-            x1 = self.KNOB_X + math.cos(angle) * outer
-            y1 = y - math.sin(angle) * outer
-            x2 = self.KNOB_X + math.cos(angle) * (outer - length)
-            y2 = y - math.sin(angle) * (outer - length)
-            c.create_line(x1, y1, x2, y2,
-                          fill=TEXT_DIM if step != 6 else TEXT, width=1)
-
-    def _draw_knob(self, y: int, value: float, selected: bool) -> None:
-        c = self.canvas
-        x = self.KNOB_X
+        frame = min(11, max(0, round(value * 11)))
+        c.itemconfig(self.knob_items[index], image=self.knob_frames[frame])
         if selected:
-            c.create_oval(x - self.SOCKET_R - 4, y - self.SOCKET_R - 4,
-                          x + self.SOCKET_R + 4, y + self.SOCKET_R + 4,
+            c.create_oval(self.KNOB_X - self.SOCKET_R - 4, y - self.SOCKET_R - 4,
+                          self.KNOB_X + self.SOCKET_R + 4, y + self.SOCKET_R + 4,
                           outline=AMBER, width=2, tags="dynamic")
-
-        # Three nested circles create a mechanically believable dark cap.
-        c.create_oval(x - self.KNOB_R, y - self.KNOB_R,
-                      x + self.KNOB_R, y + self.KNOB_R,
-                      fill="#181b1a", outline="#050606", width=2, tags="dynamic")
-        c.create_oval(x - self.KNOB_R + 5, y - self.KNOB_R + 5,
-                      x + self.KNOB_R - 5, y + self.KNOB_R - 5,
-                      fill="#333938", outline="#6d7771", tags="dynamic")
-        c.create_oval(x - self.KNOB_R + 11, y - self.KNOB_R + 11,
-                      x + self.KNOB_R - 11, y + self.KNOB_R - 11,
-                      fill="#222725", outline="", tags="dynamic")
-
-        # The indicator belongs to the knob cap, not as an independent line.
-        angle = math.radians(225 - 270 * value)
-        end_x = x + math.cos(angle) * (self.KNOB_R - 8)
-        end_y = y - math.sin(angle) * (self.KNOB_R - 8)
-        c.create_line(x, y, end_x, end_y,
-                      fill=AMBER if selected else TEXT, width=3,
-                      capstyle="round", tags="dynamic")
-        c.create_oval(x - 7, y - 7, x + 7, y + 7,
-                      fill="#151817", outline="#6d7771", tags="dynamic")
 
     def _draw_meter(self, level: float) -> None:
         c = self.canvas
@@ -183,7 +147,7 @@ class EqChannelConcept:
         self._draw_meter(level)
         for index, y in enumerate(self.KNOB_YS):
             value = 0.5 + 0.14 * math.sin(elapsed * 0.55 + index)
-            self._draw_knob(y, value, selected=index == self.selected)
+            self._draw_knob(index, y, value, selected=index == self.selected)
 
     def _tick(self) -> None:
         if self.root.winfo_exists():
