@@ -1,13 +1,11 @@
-# Final EQ channel skin
+# Final EQ module skin — narrow reference layout
 
-These assets belong only to the approved standalone EQ module geometry in `../../preview_eq_module.py`.
+The final outer panel is the approved narrow DJ/mixer reference layout:
 
 | Asset | Pixel size | Display size |
 |---|---:|---:|
-| `eq_channel_panel_680x1280.png` | 680 × 1280 | 340 × 640 logical pixels |
-| `eq_knob_cap_192x192.png` | 192 × 192 | 96 × 96 logical pixels |
-| `knob_frames/00.png` … `11.png` | 192 × 192 each | 12 whole-knob rotation positions |
+| `eq_module_480x1210.png` | 480 × 1210 | 240 × 605 logical pixels |
+| `eq_knob_cap_160x160.png` | 160 × 160 | 80 × 80 logical pixels |
+| `knob_frames/00.png` … `11.png` | 160 × 160 each | 12 whole-knob rotation positions |
 
-The panel includes the outer faceplate, exact meter recess, CLIP lens, and four 270-degree socket/tick scales. The application renders live LED segments, text, selected-band ring, and a whole rotating knob sprite above it.
-
-Do not resize these files. Future custom texture work should edit a copy at the same dimensions.
+The 480 × 1210 panel is used directly as the outer layer—never stretched. Its physical meter recess, CLIP lens, socket positions, engraved scales, and screws define the coordinate contract for the module preview.

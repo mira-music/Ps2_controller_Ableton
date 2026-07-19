@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 import tkinter as tk
 
-W, H = 390, 700
+W, H = 360, 675
 
 # Material / display colours — the geometry is the point of this study, so
 # textures will be added only after this arrangement is approved.
@@ -34,12 +34,12 @@ class EqChannelConcept:
     """One independently testable EQ strip with fixed coordinate geometry."""
 
     # Physical geometry contract for the first EQ strip concept.
-    PANEL = (25, 25, 365, 665)
-    METER_X = 66
-    KNOB_X = 255
-    KNOB_YS = (150, 300, 450, 590)
-    SOCKET_R = 54
-    KNOB_R = 40
+    PANEL = (60, 30, 300, 635)
+    METER_X = 118
+    KNOB_X = 217
+    KNOB_YS = (128, 268, 406, 539)
+    SOCKET_R = 43
+    KNOB_R = 36
 
     BANDS = ("TRIM", "HIGH", "MID", "LOW")
     VALUES = ("-0.2 dB", "+0.0 dB", "+0.0 dB", "+0.0 dB")
@@ -71,7 +71,7 @@ class EqChannelConcept:
     def _load_skin(self) -> None:
         """Load the approved 2× panel texture and whole-knob rotation frames."""
         try:
-            self.panel_image = tk.PhotoImage(file=self.assets / "eq_channel_panel_680x1280.png").subsample(2, 2)
+            self.panel_image = tk.PhotoImage(file=self.assets / "eq_module_480x1210.png").subsample(2, 2)
             self.knob_frames = [
                 tk.PhotoImage(file=self.assets / "knob_frames" / f"{index:02d}.png").subsample(2, 2)
                 for index in range(12)
@@ -85,26 +85,26 @@ class EqChannelConcept:
 
         # Approved final panel texture: exactly 340 × 640 logical pixels.
         c.create_image(x1, y1, anchor="nw", image=self.panel_image)
-        c.create_text(x1 + 16, y1 + 17, text="INPUT / EQ", anchor="w",
+        c.create_text(x1 + 14, y1 + 17, text="INPUT / EQ", anchor="w",
                       fill=TEXT, font=("Consolas", 9, "bold"))
-        c.create_text(x2 - 16, y1 + 17, text="CH 01", anchor="e",
+        c.create_text(x2 - 14, y1 + 17, text="CH 01", anchor="e",
                       fill=TEXT_DIM, font=("Consolas", 8, "bold"))
-        c.create_text(66, 80, text="CLIP", fill="#81504a",
+        c.create_text(118, 80, text="CLIP", fill="#81504a",
                       font=("Consolas", 7, "bold"))
-        c.create_text(66, 102, text="OUT", fill=TEXT_DIM,
+        c.create_text(118, 102, text="OUT", fill=TEXT_DIM,
                       font=("Consolas", 7, "bold"))
 
         self.knob_items = []
         for index, y in enumerate(self.KNOB_YS):
             self.knob_items.append(c.create_image(self.KNOB_X, y, anchor="center",
                                                    image=self.knob_frames[0]))
-            c.create_text(self.KNOB_X, y - 60, text=self.BANDS[index],
+            c.create_text(self.KNOB_X, y - 52, text=self.BANDS[index],
                           fill=TEXT, font=("Consolas", 9, "bold"))
-            c.create_text(self.KNOB_X, y + 60, text=self.VALUES[index],
+            c.create_text(self.KNOB_X, y + 52, text=self.VALUES[index],
                           fill=TEXT_DIM, font=("Consolas", 8, "bold"))
 
-        c.create_line(x1 + 14, 639, x2 - 14, 639, fill=EDGE_DARK)
-        c.create_text(x1 + 16, 650, text="E SELECT   C CLIP   SPACE SIGNAL",
+        c.create_line(x1 + 12, 606, x2 - 12, 606, fill=EDGE_DARK)
+        c.create_text(x1 + 14, 617, text="E SELECT   C CLIP",
                       anchor="w", fill=TEXT_DIM, font=("Consolas", 7, "bold"))
 
     def _draw_knob(self, index: int, y: int, value: float, selected: bool) -> None:
@@ -120,7 +120,7 @@ class EqChannelConcept:
         """Draw individual recessed LED lenses, not a flat colour ladder."""
         c = self.canvas
         segments, seg_h, gap = 22, 14, 7
-        bottom = 600
+        bottom = 585
         lit = round(level * segments)
         for index in range(segments):
             y2 = bottom - index * (seg_h + gap)
@@ -134,23 +134,23 @@ class EqChannelConcept:
 
             active = index < lit
             # Deep individual window, recessed into the meter bay.
-            c.create_rectangle(49, y1 - 1, 83, y2 + 1,
+            c.create_rectangle(98, y1 - 1, 138, y2 + 1,
                                fill="#050706", outline="#111816", tags="dynamic")
-            c.create_rectangle(53, y1 + 2, 79, y2 - 2,
+            c.create_rectangle(103, y1 + 2, 133, y2 - 2,
                                fill=on if active else dim, outline="", tags="dynamic")
             if active:
                 # Small upper reflection and lower shadow make each segment
                 # look like a lit physical lens rather than a painted block.
-                c.create_line(54, y1 + 3, 78, y1 + 3,
+                c.create_line(104, y1 + 3, 132, y1 + 3,
                               fill=highlight, tags="dynamic")
-                c.create_line(54, y2 - 3, 78, y2 - 3,
+                c.create_line(104, y2 - 3, 132, y2 - 3,
                               fill=dim, tags="dynamic")
 
         if self.clip:
-            c.create_rectangle(40, 63, 92, 97, fill="#4a1512", outline="#b84337", tags="dynamic")
-            c.create_rectangle(46, 69, 86, 91, fill=RED, outline="#ff8b76", tags="dynamic")
-            c.create_line(49, 71, 83, 71, fill="#ffd1c4", tags="dynamic")
-            c.create_text(66, 80, text="CLIP", fill="#fff6ed",
+            c.create_rectangle(88, 63, 148, 97, fill="#4a1512", outline="#b84337", tags="dynamic")
+            c.create_rectangle(96, 69, 140, 91, fill=RED, outline="#ff8b76", tags="dynamic")
+            c.create_line(99, 71, 137, 71, fill="#ffd1c4", tags="dynamic")
+            c.create_text(118, 80, text="CLIP", fill="#fff6ed",
                           font=("Consolas", 7, "bold"), tags="dynamic")
 
     def _draw_dynamic(self) -> None:
