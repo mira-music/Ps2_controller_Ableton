@@ -76,6 +76,13 @@ class EqChannelConcept:
                 tk.PhotoImage(file=self.assets / "knob_frames" / f"{index:02d}.png").subsample(2, 2)
                 for index in range(12)
             ]
+            self.meter_leds = {
+                (zone, state): tk.PhotoImage(
+                    file=self.assets / "meter_leds" / f"{zone}_{state}.png"
+                ).subsample(2, 2)
+                for zone in ("green", "yellow", "red")
+                for state in ("off", "on")
+            }
         except tk.TclError as exc:
             raise SystemExit(f"Could not load EQ concept skin: {exc}") from exc
 
@@ -117,7 +124,7 @@ class EqChannelConcept:
                           outline=AMBER, width=2, tags="dynamic")
 
     def _draw_meter(self, level: float) -> None:
-        """Draw individual recessed LED lenses, not a flat colour ladder."""
+        """Instance RGBA physical LED lens sprites into the meter recess."""
         c = self.canvas
         segments, seg_h, gap = 22, 15, 8
         bottom = 596
@@ -126,25 +133,15 @@ class EqChannelConcept:
             y2 = bottom - index * (seg_h + gap)
             y1 = y2 - seg_h
             if index < 14:
-                on, dim, highlight = GREEN, "#153018", "#b6e2a9"
+                zone = "green"
             elif index < 19:
-                on, dim, highlight = YELLOW, "#3a2d11", "#ffe08a"
+                zone = "yellow"
             else:
-                on, dim, highlight = RED, "#3a1412", "#ff9a89"
-
-            active = index < lit
-            # Deep individual window, recessed into the meter bay.
-            c.create_rectangle(98, y1 - 1, 138, y2 + 1,
-                               fill="#050706", outline="#111816", tags="dynamic")
-            c.create_rectangle(103, y1 + 2, 133, y2 - 2,
-                               fill=on if active else dim, outline="", tags="dynamic")
-            if active:
-                # Small upper reflection and lower shadow make each segment
-                # look like a lit physical lens rather than a painted block.
-                c.create_line(104, y1 + 3, 132, y1 + 3,
-                              fill=highlight, tags="dynamic")
-                c.create_line(104, y2 - 3, 132, y2 - 3,
-                              fill=dim, tags="dynamic")
+                zone = "red"
+            state = "on" if index < lit else "off"
+            c.create_image(118, (y1 + y2) // 2,
+                           image=self.meter_leds[(zone, state)],
+                           anchor="center", tags="dynamic")
 
         if self.clip:
             c.create_rectangle(92, 65, 142, 91, fill="#4a1512", outline="#b84337", tags="dynamic")
