@@ -7,6 +7,7 @@ existing app, its textures, Ableton, OSC, pygame, or controller code.
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 import tkinter as tk
