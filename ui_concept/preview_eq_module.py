@@ -37,7 +37,7 @@ class EqChannelConcept:
     PANEL = (60, 30, 300, 635)
     METER_X = 118
     KNOB_X = 217
-    KNOB_YS = (127, 265, 402, 539)
+    KNOB_YS = (114, 244, 374, 504)
     SOCKET_R = 50
     KNOB_R = 36
 
@@ -147,8 +147,8 @@ class EqChannelConcept:
                               fill=dim, tags="dynamic")
 
         if self.clip:
-            c.create_rectangle(88, 63, 148, 97, fill="#4a1512", outline="#b84337", tags="dynamic")
-            c.create_rectangle(96, 69, 140, 91, fill=RED, outline="#ff8b76", tags="dynamic")
+            c.create_rectangle(92, 65, 142, 91, fill="#4a1512", outline="#b84337", tags="dynamic")
+            c.create_rectangle(96, 69, 140, 87, fill=RED, outline="#ff8b76", tags="dynamic")
             c.create_line(99, 71, 137, 71, fill="#ffd1c4", tags="dynamic")
             c.create_text(118, 80, text="CLIP", fill="#fff6ed",
                           font=("Consolas", 7, "bold"), tags="dynamic")
