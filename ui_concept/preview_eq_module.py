@@ -37,7 +37,7 @@ class EqChannelConcept:
     PANEL = (25, 25, 365, 665)
     METER_X = 66
     KNOB_X = 255
-    KNOB_YS = (165, 295, 425, 555)
+    KNOB_YS = (150, 300, 450, 590)
     SOCKET_R = 54
     KNOB_R = 40
 
@@ -98,9 +98,9 @@ class EqChannelConcept:
         for index, y in enumerate(self.KNOB_YS):
             self.knob_items.append(c.create_image(self.KNOB_X, y, anchor="center",
                                                    image=self.knob_frames[0]))
-            c.create_text(self.KNOB_X, y - 68, text=self.BANDS[index],
+            c.create_text(self.KNOB_X, y - 60, text=self.BANDS[index],
                           fill=TEXT, font=("Consolas", 9, "bold"))
-            c.create_text(self.KNOB_X, y + 68, text=self.VALUES[index],
+            c.create_text(self.KNOB_X, y + 60, text=self.VALUES[index],
                           fill=TEXT_DIM, font=("Consolas", 8, "bold"))
 
         c.create_line(x1 + 14, 639, x2 - 14, 639, fill=EDGE_DARK)
@@ -117,6 +117,7 @@ class EqChannelConcept:
                           outline=AMBER, width=2, tags="dynamic")
 
     def _draw_meter(self, level: float) -> None:
+        """Draw individual recessed LED lenses, not a flat colour ladder."""
         c = self.canvas
         segments, seg_h, gap = 22, 14, 7
         bottom = 600
@@ -125,17 +126,30 @@ class EqChannelConcept:
             y2 = bottom - index * (seg_h + gap)
             y1 = y2 - seg_h
             if index < 14:
-                on, off = GREEN, "#183019"
+                on, dim, highlight = GREEN, "#153018", "#b6e2a9"
             elif index < 19:
-                on, off = YELLOW, "#382e13"
+                on, dim, highlight = YELLOW, "#3a2d11", "#ffe08a"
             else:
-                on, off = RED, "#351513"
-            c.create_rectangle(57, y1, 75, y2,
-                               fill=on if index < lit else off,
-                               outline="", tags="dynamic")
+                on, dim, highlight = RED, "#3a1412", "#ff9a89"
+
+            active = index < lit
+            # Deep individual window, recessed into the meter bay.
+            c.create_rectangle(49, y1 - 1, 83, y2 + 1,
+                               fill="#050706", outline="#111816", tags="dynamic")
+            c.create_rectangle(53, y1 + 2, 79, y2 - 2,
+                               fill=on if active else dim, outline="", tags="dynamic")
+            if active:
+                # Small upper reflection and lower shadow make each segment
+                # look like a lit physical lens rather than a painted block.
+                c.create_line(54, y1 + 3, 78, y1 + 3,
+                              fill=highlight, tags="dynamic")
+                c.create_line(54, y2 - 3, 78, y2 - 3,
+                              fill=dim, tags="dynamic")
 
         if self.clip:
+            c.create_rectangle(40, 63, 92, 97, fill="#4a1512", outline="#b84337", tags="dynamic")
             c.create_rectangle(46, 69, 86, 91, fill=RED, outline="#ff8b76", tags="dynamic")
+            c.create_line(49, 71, 83, 71, fill="#ffd1c4", tags="dynamic")
             c.create_text(66, 80, text="CLIP", fill="#fff6ed",
                           font=("Consolas", 7, "bold"), tags="dynamic")
 

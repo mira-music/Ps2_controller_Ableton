@@ -5,8 +5,8 @@ These assets belong only to the approved standalone EQ module geometry in `../..
 | Asset | Pixel size | Display size |
 |---|---:|---:|
 | `eq_channel_panel_680x1280.png` | 680 × 1280 | 340 × 640 logical pixels |
-| `eq_knob_cap_176x176.png` | 176 × 176 | 88 × 88 logical pixels |
-| `knob_frames/00.png` … `11.png` | 176 × 176 each | 12 whole-knob rotation positions |
+| `eq_knob_cap_192x192.png` | 192 × 192 | 96 × 96 logical pixels |
+| `knob_frames/00.png` … `11.png` | 192 × 192 each | 12 whole-knob rotation positions |
 
 The panel includes the outer faceplate, exact meter recess, CLIP lens, and four 270-degree socket/tick scales. The application renders live LED segments, text, selected-band ring, and a whole rotating knob sprite above it.
 
