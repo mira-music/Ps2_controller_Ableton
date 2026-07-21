@@ -63,6 +63,10 @@ FONT = {
     ":": ("00000", "00110", "00110", "00000", "00110", "00110", "00000"),
     "*": ("00000", "10101", "01110", "11111", "01110", "10101", "00000"),
     ">": ("10000", "01000", "00100", "00010", "00100", "01000", "10000"),
+    "|": ("00100", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "=": ("00000", "11111", "00000", "11111", "00000", "00000", "00000"),
+    "[": ("01110", "01000", "01000", "01000", "01000", "01000", "01110"),
+    "]": ("01110", "00010", "00010", "00010", "00010", "00010", "01110"),
 }
 
 VW, VH, SCALE = 160, 120, 4
@@ -76,7 +80,7 @@ GRID = "#0b1d10"
 DIM = "#315b35"
 GREEN = "#78d47d"
 BRIGHT = "#c5ffc4"
-ALERT = "#d6ff80"
+ALERT = "#b7ff9f"
 RED = "#ff7969"
 
 
@@ -151,92 +155,101 @@ class PixelMonitor:
                            fill=CRT, outline="", tags="static_screen")
 
     def _draw_knob(self, x: int, y: int, value: float, selected: bool) -> None:
-        # 17×17 pixel dial. The ring and pointer are all quantized to the
-        # virtual pixel grid—no Canvas ovals or anti-aliasing inside the CRT.
-        radius, inner = 8, 6
+        """A minimal one-pixel-rim CRT dial: no filled pseudo-3D hardware."""
+        radius = 7
+        rim = BRIGHT if selected else GREEN
         for py in range(-radius, radius + 1):
             for px in range(-radius, radius + 1):
                 distance = math.sqrt(px * px + py * py)
-                if inner <= distance <= radius:
-                    self.px(x + px, y + py, ALERT if selected else DIM)
-                elif distance < inner:
-                    self.px(x + px, y + py, "#0e2112")
+                if abs(distance - radius) <= 0.45:
+                    self.px(x + px, y + py, rim)
+        # Four sparse cardinal reference pixels preserve the monitor language.
+        for dx, dy in ((0, -9), (9, 0), (0, 9), (-9, 0)):
+            self.px(x + dx, y + dy, DIM)
         angle = math.radians(225 - value * 270)
-        for step in range(1, 7):
+        for step in range(1, 6):
             self.px(x + round(math.cos(angle) * step),
                     y - round(math.sin(angle) * step), BRIGHT)
 
     def _draw_meter(self, level: float) -> None:
-        lit = int(level * 20)
-        for index in range(20):
-            y = 25 + (19 - index) * 4
-            if index < 12:
-                on, off = GREEN, "#17361c"
-            elif index < 17:
-                on, off = ALERT, "#384013"
+        lit = int(level * 18)
+        for index in range(18):
+            y = 28 + (17 - index) * 4
+            if index < 11:
+                on, off = GREEN, "#14351a"
+            elif index < 15:
+                on, off = ALERT, "#344d21"
             else:
-                on, off = RED, "#431714"
-            self.rect(8, y, 5, 3, on if index < lit else off)
-            if index < lit:
-                self.line(8, y, 12, y, BRIGHT)
+                on, off = RED, "#451a16"
+            self.rect(9, y, 5, 2, on if index < lit else off)
+            self.px(9, y, BRIGHT if index < lit and index < 15 else on)
+
+    def _box(self, x: int, y: int, width: int, height: int, colour: str = DIM) -> None:
+        self.line(x, y, x + width, y, colour)
+        self.line(x, y + height, x + width, y + height, colour)
+        self.line(x, y, x, y + height, colour)
+        self.line(x + width, y, x + width, y + height, colour)
+        self.text(x - 1, y - 3, "+", colour)
+        self.text(x + width - 1, y - 3, "+", colour)
+        self.text(x - 1, y + height - 3, "+", colour)
+        self.text(x + width - 1, y + height - 3, "+", colour)
 
     def _draw_screen(self) -> None:
         now = time.perf_counter() - self.started
         self.canvas.delete("dynamic")
 
-        # Fixed scanlines and sparse low-brightness pixel noise.
+        # CRT raster: only dark green scan lines and sparse single-pixel noise.
         for y in range(0, VH, 2):
             self.rect(0, y, VW, 1, GRID)
-        for index in range(40):
-            x = (index * 29 + int(now * 3)) % VW
-            y = (index * 17) % VH
-            self.px(x, y, "#0d2713")
+        for index in range(30):
+            self.px((index * 31 + int(now * 2)) % VW, (index * 19) % VH, "#0c2612")
 
-        self.text(5, 4, "FX MACHINE", BRIGHT, 1)
-        self.text(121, 4, "V 1 0", DIM, 1)
+        self.text(5, 4, "+-- FX MACHINE --+", BRIGHT)
+        self.text(120, 4, "CRT 01", DIM)
         self.line(4, 14, 155, 14, DIM)
-        self.text(5, 18, "PLAYING" if self.playing else "STOPPED", GREEN if self.playing else RED, 1)
-        self.text(105, 18, "124 0 BPM", BRIGHT, 1)
+        self.text(5, 18, "PLAYING" if self.playing else "STOPPED", GREEN if self.playing else RED)
+        self.text(105, 18, "124 0 BPM", BRIGHT)
 
-        # EQ channel / meter region.
-        self.text(5, 25, "OUT", DIM, 1)
-        level = 0.5 + 0.35 * abs(math.sin(now * 1.1)) if self.playing else 0.0
+        # Left: output meter and a deliberately narrow, well-spaced EQ strip.
+        self._box(5, 24, 13, 80)
+        self.text(7, 20, "OUT", DIM)
+        meter_level = 0.5 + 0.35 * abs(math.sin(now * 1.1)) if self.playing else 0.0
         if self.clip:
-            level = 0.98
-        self._draw_meter(level)
-        self.text(5, 108, "CLIP" if self.clip else "SAFE", RED if self.clip else GREEN, 1)
+            meter_level = 0.98
+        self._draw_meter(meter_level)
+        self.text(6, 107, "CLIP" if self.clip else "SAFE", RED if self.clip else GREEN)
 
-        self.text(25, 25, "EQ CHANNEL", ALERT, 1)
+        self._box(25, 24, 61, 80)
+        self.text(28, 20, "EQ CHANNEL", ALERT)
         bands = ("TRIM", "HIGH", "MID", "LOW")
         values = ("-0 2", "+0 0", "+0 0", "+0 0")
         for index, (band, value) in enumerate(zip(bands, values)):
-            y = 37 + index * 19
+            y = 33 + index * 20
             selected = index == self.eq_band
-            self.text(28, y - 9, band, ALERT if selected else GREEN, 1)
-            self._draw_knob(52, y, 0.50 + 0.13 * math.sin(now * 0.5 + index), selected)
-            self.text(65, y - 2, value, BRIGHT if selected else DIM, 1)
+            self._draw_knob(45, y, 0.50 + 0.13 * math.sin(now * 0.5 + index), selected)
+            # Labels are placed to the right of the dial, never above/below it.
+            self.text(57, y - 5, band, BRIGHT if selected else GREEN)
+            self.text(57, y + 4, value, ALERT if selected else DIM)
 
-        # Central terminal session block.
-        self.rect(82, 25, 73, 42, "#09160c")
-        self.line(82, 25, 154, 25, DIM)
-        self.line(82, 66, 154, 66, DIM)
-        self.text(85, 28, "SESSION NAV", ALERT, 1)
-        self.text(85, 36, "BMK SONG1", GREEN, 1)
-        self.text(85, 43, "GROUP DRUMS", GREEN, 1)
-        self.text(85, 50, "TRK TOM KICK", GREEN, 1)
-        self.text(85, 57, "SCN SONG1", GREEN, 1)
+        # Right: compact session terminal, then a non-overlapping 4×2 FX bank.
+        self._box(92, 24, 63, 35)
+        self.text(95, 20, "SESSION NAV", ALERT)
+        self.text(95, 29, "BMK SONG1", GREEN)
+        self.text(95, 36, "GRP DRUMS", GREEN)
+        self.text(95, 43, "TRK TOM", GREEN)
+        self.text(95, 50, "SCN SONG1", GREEN)
 
-        # Eight pixel-FX dials in a compact 4×2 bank.
-        self.text(85, 72, "FX MATRIX", ALERT if self.fx_focus else GREEN, 1)
-        names = ("FIL", "MOD", "RES", "STU", "REV", "SND", "DLY", "WID")
+        self._box(92, 64, 63, 46)
+        self.text(95, 60, "FX MATRIX", ALERT if self.fx_focus else GREEN)
+        names = ("F", "M", "R", "S", "V", "N", "D", "W")
         for index, name in enumerate(names):
             col, row = index % 4, index // 4
-            x, y = 91 + col * 17, 86 + row * 19
+            x, y = 101 + col * 17, 76 + row * 20
             self._draw_knob(x, y, 0.20 + 0.65 * ((math.sin(now * .4 + index) + 1) / 2), self.fx_focus and index == 0)
-            self.text(x - 5, y + 10, name, DIM, 1)
+            self.text(x - 2, y + 9, name, BRIGHT if self.fx_focus and index == 0 else DIM)
 
-        self.line(4, 113, 155, 113, DIM)
-        self.text(5, 115, "> E EQ F FX C CLIP", DIM, 1)
+        self.line(4, 112, 155, 112, DIM)
+        self.text(5, 115, "> E EQ F FX C CLIP", DIM)
 
     def _tick(self) -> None:
         if self.root.winfo_exists():
