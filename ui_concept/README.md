@@ -29,3 +29,16 @@ Keyboard controls:
 - `C`: toggle CLIP warning
 - `Space`: toggle simulated signal activity
 - `Esc`: close
+
+## Retro monitor model
+
+A separate all-pixel, single-monitor model is now available. It does not reuse
+any panel textures or hardware-module layout:
+
+```bat
+python ui_concept\preview_retro_monitor.py
+```
+
+It renders every interface element inside a 160 × 120 virtual CRT grid at an
+integer 4× scale. `E`, `F`, `C`, and `Space` cycle EQ focus, FX focus, CLIP,
+and transport state respectively.
