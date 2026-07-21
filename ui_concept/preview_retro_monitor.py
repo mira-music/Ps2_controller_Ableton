@@ -174,7 +174,7 @@ class PixelMonitor:
     def _draw_meter(self, level: float) -> None:
         lit = int(level * 18)
         for index in range(18):
-            y = 28 + (17 - index) * 4
+            y = 29 + (17 - index) * 4
             if index < 11:
                 on, off = GREEN, "#14351a"
             elif index < 15:
@@ -198,58 +198,61 @@ class PixelMonitor:
         now = time.perf_counter() - self.started
         self.canvas.delete("dynamic")
 
-        # CRT raster: only dark green scan lines and sparse single-pixel noise.
+        # CRT raster: dark scan lines and sparse single-pixel phosphor noise.
         for y in range(0, VH, 2):
             self.rect(0, y, VW, 1, GRID)
         for index in range(30):
             self.px((index * 31 + int(now * 2)) % VW, (index * 19) % VH, "#0c2612")
 
+        # Header occupies rows 4-14 exclusively.
         self.text(5, 4, "+-- FX MACHINE --+", BRIGHT)
         self.text(120, 4, "CRT 01", DIM)
         self.line(4, 14, 155, 14, DIM)
-        self.text(5, 18, "PLAYING" if self.playing else "STOPPED", GREEN if self.playing else RED)
-        self.text(105, 18, "124 0 BPM", BRIGHT)
+        self.text(5, 17, "PLAYING" if self.playing else "STOPPED", GREEN if self.playing else RED)
+        self.text(105, 17, "124 0 BPM", BRIGHT)
 
-        # Left: output meter and a deliberately narrow, well-spaced EQ strip.
-        self._box(5, 24, 13, 80)
-        self.text(7, 20, "OUT", DIM)
+        # Left output meter: title has its own row, then 18 non-overlapping LEDs.
+        self.text(6, 19, "OUT", DIM)
+        self._box(5, 24, 13, 84)
         meter_level = 0.5 + 0.35 * abs(math.sin(now * 1.1)) if self.playing else 0.0
         if self.clip:
             meter_level = 0.98
         self._draw_meter(meter_level)
-        self.text(6, 107, "CLIP" if self.clip else "SAFE", RED if self.clip else GREEN)
+        self.text(6, 104, "CLIP" if self.clip else "SAFE", RED if self.clip else GREEN)
 
-        self._box(25, 24, 61, 80)
-        self.text(28, 20, "EQ CHANNEL", ALERT)
+        # EQ: every dial owns a 19-row band. Labels and values sit to the
+        # right, never above/below or in the dial's pixel circle.
+        self.text(25, 19, "EQ CHANNEL", ALERT)
+        self._box(22, 24, 62, 84)
         bands = ("TRIM", "HIGH", "MID", "LOW")
         values = ("-0 2", "+0 0", "+0 0", "+0 0")
         for index, (band, value) in enumerate(zip(bands, values)):
-            y = 33 + index * 20
+            y = 39 + index * 19
             selected = index == self.eq_band
-            self._draw_knob(45, y, 0.50 + 0.13 * math.sin(now * 0.5 + index), selected)
-            # Labels are placed to the right of the dial, never above/below it.
-            self.text(57, y - 5, band, BRIGHT if selected else GREEN)
-            self.text(57, y + 4, value, ALERT if selected else DIM)
+            self._draw_knob(42, y, 0.50 + 0.13 * math.sin(now * 0.5 + index), selected)
+            self.text(53, y - 5, band, BRIGHT if selected else GREEN)
+            self.text(53, y + 4, value, ALERT if selected else DIM)
 
-        # Right: compact session terminal, then a non-overlapping 4×2 FX bank.
-        self._box(92, 24, 63, 35)
-        self.text(95, 20, "SESSION NAV", ALERT)
-        self.text(95, 29, "BMK SONG1", GREEN)
-        self.text(95, 36, "GRP DRUMS", GREEN)
-        self.text(95, 43, "TRK TOM", GREEN)
-        self.text(95, 50, "SCN SONG1", GREEN)
+        # Session monitor: title and four rows have an 8-pixel baseline grid.
+        self._box(88, 24, 67, 42)
+        self.text(91, 27, "SESSION NAV", ALERT)
+        self.text(91, 35, "BMK SONG1", GREEN)
+        self.text(91, 43, "GRP DRUMS", GREEN)
+        self.text(91, 51, "TRK TOM", GREEN)
+        self.text(91, 59, "SCN SONG1", GREEN)
 
-        self._box(92, 64, 63, 46)
-        self.text(95, 60, "FX MATRIX", ALERT if self.fx_focus else GREEN)
+        # FX matrix: titles, dials and one-character legends occupy separate rows.
+        self._box(88, 68, 67, 40)
+        self.text(91, 70, "FX", ALERT if self.fx_focus else GREEN)
         names = ("F", "M", "R", "S", "V", "N", "D", "W")
         for index, name in enumerate(names):
             col, row = index % 4, index // 4
-            x, y = 101 + col * 17, 76 + row * 20
+            x, y = 98 + col * 18, 80 + row * 19
             self._draw_knob(x, y, 0.20 + 0.65 * ((math.sin(now * .4 + index) + 1) / 2), self.fx_focus and index == 0)
-            self.text(x - 2, y + 9, name, BRIGHT if self.fx_focus and index == 0 else DIM)
+            self.text(x - 2, y + 7, name, BRIGHT if self.fx_focus and index == 0 else DIM)
 
-        self.line(4, 112, 155, 112, DIM)
-        self.text(5, 115, "> E EQ F FX C CLIP", DIM)
+        self.line(4, 110, 155, 110, DIM)
+        self.text(5, 113, "> E EQ F FX C CLIP", DIM)
 
     def _tick(self) -> None:
         if self.root.winfo_exists():
